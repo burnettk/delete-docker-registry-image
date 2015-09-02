@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# Usage:
+# Shut down your registry service to avoid race conditions and possible data loss
+# and then run the command with an image name like this:
+# ./delete_registry_image --image testrepo/awesomeimage --dry-run
+
+OPTS=`getopt -o vhnfi: --long verbose,help,dry-run,force,image: -n 'parse-options' -- "$@"`
+
+USAGE="Usage: delete_registry_image --image testrepo/awesomeimage --dry-run --verbose"
+
+if [ $? != 0 ] ; then echo "Failed parsing options. $USAGE" >&2 ; exit 1 ; fi
+
+eval set -- "$OPTS"
+
+VERBOSE=false
+HELP=false
+FORCE=false
+DRY_RUN=false
+
+while true; do
+  case "$1" in
+    -v | --verbose ) VERBOSE=true; shift ;;
+    -h | --help )    HELP=true; shift ;;
+    -n | --dry-run ) DRY_RUN=true; shift ;;
+    -f | --force ) FORCE=true; shift ;;
+    -i | --image ) IMAGE="$2"; shift; shift ;;
+    -- ) shift; break ;;
+    * ) break ;;
+  esac
+done
+
+if [[ $HELP == true ]]
+then
+  echo $USAGE
+  exit
+fi
+
+if [[ -z $REGISTRY_DATA_DIR ]]
+then
+  REGISTRY_DATA_DIR=/opt/registry_data/docker/registry/v2
+fi
+
+cd $REGISTRY_DATA_DIR
+
+repositories_dir="repositories"
+if [[ ! -d "${repositories_dir}" ]] ; then
+  SCRIPTDIR=$( cd $(dirname $0) ; pwd -P )
+  echo "No repositories directory found inside REGISTRY_DATA_DIR '$REGISTRY_DATA_DIR'. Set REGISTRY_DATA_DIR correctly in this script ($SCRIPTDIR/$0) or pass it in as an environment variable."
+  exit 1
+fi
+repository_dir_for_image="${repositories_dir}/${IMAGE}"
+if [[ ! -d "${repository_dir_for_image}" ]] ; then
+  echo "No image '$IMAGE' found in repositories directory '$repositories_dir'"
+  exit 1
+fi
+
+blobs_to_delete=()
+link_files=$(find ${repository_dir_for_image} -name link)
+at_least_one_blob_was_used_elsewhere=false
+for file in $link_files
+do
+  sha256=$(cat $file | sed -e 's/sha256://g')
+
+  # i'm not sure if this egrep with the ./ prefix is super-portable, but it works for me
+  # and i want to be careful not to ignore another repo that might be using this blob
+  if find ./${repositories_dir} -name link | grep $sha256/link | egrep -v "^./${repository_dir_for_image}" > /dev/null
+  then
+    at_least_one_blob_was_used_elsewhere=true
+    if $VERBOSE
+    then
+      echo "found elsewhere: $sha256"
+      echo "Blob found in another repository. not deleting: $sha256"
+    fi
+  else
+    directory_prefix=${sha256:0:2}
+    blobs_to_delete+=("blobs/sha256/${directory_prefix}/${sha256}")
+    if $VERBOSE
+    then
+      echo "Blob not found in another repository. Marking for deletion: $sha256"
+    fi
+  fi
+done
+
+if [[ $at_least_one_blob_was_used_elsewhere == true || $FORCE == true ]]
+then
+  for blob_to_delete in "${blobs_to_delete[@]}"
+  do
+    if $DRY_RUN
+    then
+      echo "DRY_RUN: would have deleted directory: $blob_to_delete"
+    else
+      rm -rf $blob_to_delete
+    fi
+  done
+  if $DRY_RUN
+  then
+    echo "DRY_RUN: would have deleted repository directory: $repository_dir_for_image"
+  else
+    rm -rf $repository_dir_for_image
+  fi
+else
+  echo "This is maybe fine but a bit worrisome."
+  echo "None of the blobs that make up the image you want to delete were used by another image."
+  echo
+  echo "blobs are:"
+  printf "%s\n" "${blobs_to_delete[@]}"
+  echo
+  echo "Because of this, we're aborting the delete."
+  echo "If you're sure you actually want to delete this data, add a --force option"
+  exit 1
+fi
