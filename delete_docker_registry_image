@@ -3,11 +3,11 @@
 # Usage:
 # Shut down your registry service to avoid race conditions and possible data loss
 # and then run the command with an image name like this:
-# ./delete_registry_image --image testrepo/awesomeimage --dry-run
+# delete_docker_registry_image --image testrepo/awesomeimage --dry-run
 
 OPTS=`getopt -o vhnfi: --long verbose,help,dry-run,force,image: -n 'parse-options' -- "$@"`
 
-USAGE="Usage: delete_registry_image --image testrepo/awesomeimage --dry-run --verbose"
+USAGE="Usage: delete_docker_registry_image --image testrepo/awesomeimage --dry-run --verbose"
 
 if [ $? != 0 ] ; then echo "Failed parsing options. $USAGE" >&2 ; exit 1 ; fi
 
@@ -84,6 +84,12 @@ done
 
 if [[ $at_least_one_blob_was_used_elsewhere == true || $FORCE == true ]]
 then
+  if $DRY_RUN
+  then
+    echo "DRY_RUN: would have deleted repository directory: $repository_dir_for_image"
+  else
+    rm -rf $repository_dir_for_image
+  fi
   for blob_to_delete in "${blobs_to_delete[@]}"
   do
     if $DRY_RUN
@@ -93,12 +99,6 @@ then
       rm -rf $blob_to_delete
     fi
   done
-  if $DRY_RUN
-  then
-    echo "DRY_RUN: would have deleted repository directory: $repository_dir_for_image"
-  else
-    rm -rf $repository_dir_for_image
-  fi
 else
   echo "This is maybe fine but a bit worrisome."
   echo "None of the blobs that make up the image you want to delete were used by another image."
