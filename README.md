@@ -1,0 +1,1 @@
+# delete-docker-registry-image
