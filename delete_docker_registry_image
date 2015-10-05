@@ -59,7 +59,6 @@ function delete_layers_no_longer_used_by_this_repo() {
     if $DRY_RUN; then
       echo "DRY_RUN: would have deleted layer metadata directory: $directory_to_delete"
     else
-      echo "DELETING: $directory_to_delete"
       rm -rf $directory_to_delete
     fi
   done
@@ -190,7 +189,7 @@ else
 
   for manifest_digest in ${unique_manifest_digests[@]}; do
     if $VERBOSE; then
-      echo "looking at digest $manifest_digest"
+      echo "Looking up fileystem layers for manifest digest $manifest_digest"
     fi
     manifest_revisions_to_delete+=("$dir_for_revisions/sha256/$manifest_digest")
     directory_prefix=${manifest_digest:0:2}
@@ -215,10 +214,9 @@ else
         used_digest=$(echo $filesystem_layer_sha256_for_tag | sed -e 's/sha256://g')
         if [ "$used_digest" == "$digest" ]; then
           digest_in_use_in_same_repo=true
-          if $VERBOSE; then
-            echo "Blob being used by another tag in this repository. not deleting: $digest"
-          fi
           another_tag_using=$tag_subdir
+          at_least_one_blob_was_used_elsewhere=true
+          break 2 # break out of 'for tag_subdir' loop completely
         fi
       done
     done
