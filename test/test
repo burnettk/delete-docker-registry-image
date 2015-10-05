@@ -27,9 +27,7 @@ function get_test_docker_image_ids() {
 }
 
 function delete_test_docker_images() {
-  echo 'in delete_test_docker_images'
   (get_test_docker_image_ids | xargs docker rmi -f) || true
-  echo 'done with delete_test_docker_images'
 }
 
 # if it finds a directory, fail. If not, noop.
@@ -128,6 +126,46 @@ function test_deleting_by_tag() {
   assert_that_registry_has_no_data
 }
 
+function test_deleting_actually_deletes() {
+  setup
+  push_test_images c
+  run_delete --image test/c:1 --force --prune
+  delete_test_docker_images
+  if docker pull localhost:5000/test/c:1; then
+    echo "we should not have been able to pull that deleted repo"
+    exit 1
+  fi
+  assert_that_registry_has_no_data
+}
+
+function test_deleting_with_dry_run_does_not_delete() {
+  setup
+  push_test_images c
+  run_delete --image test/c:1 --force --prune --dry-run
+  delete_test_docker_images
+  docker pull localhost:5000/test/c:1
+  run_delete --image test/c:1 --force --prune
+  assert_that_registry_has_no_data
+}
+
+function test_deleting_with_no_image_argument_tells_you_to_try_again() {
+  if run_delete | grep 'No repositories directory found inside REGISTRY_DATA_DIR'; then
+    echo "Yep, we expected this error message before adding a repo"
+  else
+    echo "Did not receive expected error message when trying to delete before adding a repo"
+    exit 1
+  fi
+  push_test_images a
+  if run_delete | grep 'Please specify an image to delete'; then
+    echo "Yep, we expected this error message"
+  else
+    echo "Did not receive expected error message when trying to delete with no image argument"
+    exit 1
+  fi
+  run_delete --image test/a --force --prune -v
+  assert_that_registry_has_no_data
+}
+
 function bounce_registry() {
   docker ps | grep registry | awk '{ print $1 }' | xargs -n 1 docker restart
 }
@@ -137,12 +175,12 @@ function setup() {
   bounce_registry
 }
 
-# test_deleting_all_images_deletes_all_date
-test_deleting_tag_first_does_not_leave_stuff_lying_around # failing because digests are in use by another repo when we clean up the layers on the tag, and they are also in
-# use when we go to clean up the image next (since the layers in the tag were never deleted). maybe kill the layers in the tag's repo as long as no *other* tags *in the repo* are using it.
-# then everything would be cleaned up.
-
-# test_deleting_an_image_does_not_harm_an_equivalent_tag_in_another_repo
-# test_deleting_by_tag
+test_deleting_all_images_deletes_all_date
+test_deleting_tag_first_does_not_leave_stuff_lying_around
+test_deleting_an_image_does_not_harm_an_equivalent_tag_in_another_repo
+test_deleting_by_tag
+test_deleting_actually_deletes
+test_deleting_with_dry_run_does_not_delete
+test_deleting_with_no_image_argument_tells_you_to_try_again
 
 echo TESTS PASSED
