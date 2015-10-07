@@ -7,9 +7,9 @@
 
 OPTS=`getopt -o vhnfpi: --long verbose,help,dry-run,force,prune,image: -n 'parse-options' -- "$@"`
 
-USAGE="Usage: delete_docker_registry_image --image testrepo/awesomeimage --dry-run --verbose ***OR*** delete_docker_registry_image --image testrepo/awesomeimage:killertag"
+USAGE="Usage: \ndelete_docker_registry_image --image testrepo/awesomeimage\nor\ndelete_docker_registry_image --image testrepo/awesomeimage:killertag \n\nOPTIONS: \n -v | --verbose \n -h | --help \n -n | --dry-run \n -p | --prune \n -f | --force \n -i | --image (ex. image or image:tag) \n"
 
-if [ $? != 0 ] ; then echo "Failed parsing options. $USAGE" >&2 ; exit 1 ; fi
+if [ $? != 0 ] ; then echo -e "Failed parsing options. \n\n$USAGE" >&2 ; exit 1 ; fi
 
 eval set -- "$OPTS"
 
@@ -33,12 +33,13 @@ while true; do
 done
 
 if $HELP; then
-  echo $USAGE
+  echo -e $USAGE
   exit
 fi
 
 if [[ -z $REGISTRY_DATA_DIR ]]; then
   REGISTRY_DATA_DIR=/opt/registry_data/docker/registry/v2
+  echo -e "Important:\nset REGISTRY_DATA_DIR as shell variable to one proper for You enviromen !\n Currently it's: $REGISTRY_DATA_DIR"
 fi
 
 function delete_blobs() {
@@ -97,7 +98,7 @@ if [[ ! -d "${repositories_dir}" ]] ; then
 fi
 
 if [[ -z $IMAGE ]]; then
-  echo "Please specify an image to delete. $USAGE"
+  echo -e "Please specify an image to delete. \n\n$USAGE"
   exit 1
 fi
 
@@ -121,7 +122,7 @@ if [[ -z $TAG_IDENTIFIER ]]; then
   fi
   repository_dir_for_image="${repositories_dir}/${IMAGE}"
   if [[ ! -d "${repo_dir}" ]] ; then
-    echo "No repository '$REPO' found in repositories directory '$repositories_dir'"
+    echo "No repository '$REPO' found in repositories directory $REGISTRY_DATA_DIR/$repositories_dir"
     exit 1
   fi
 
