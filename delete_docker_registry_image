@@ -39,7 +39,7 @@ fi
 
 if [[ -z $REGISTRY_DATA_DIR ]]; then
   REGISTRY_DATA_DIR=/opt/registry_data/docker/registry/v2
-  echo -e "Important:\nset REGISTRY_DATA_DIR as shell variable to one proper for You enviromen !\n Currently it's: $REGISTRY_DATA_DIR"
+  echo -e "Important:\nset REGISTRY_DATA_DIR as shell variable to one proper for your enviroment!\n  Currently it is: $REGISTRY_DATA_DIR\n"
 fi
 
 function delete_blobs() {
