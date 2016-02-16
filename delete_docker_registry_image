@@ -5,9 +5,19 @@
 # and then run the command with an image name like this:
 # delete_docker_registry_image --image testrepo/awesomeimage --dry-run
 
-OPTS=`getopt -o vhnfpi: --long verbose,help,dry-run,force,prune,image: -n 'parse-options' -- "$@"`
+function error_handler() {
+  echo "Error occurred in script at line: ${1}."
+  echo "Line exited with status: ${2}"
+}
 
-USAGE="Usage: \ndelete_docker_registry_image --image testrepo/awesomeimage\nor\ndelete_docker_registry_image --image testrepo/awesomeimage:killertag \n\nOPTIONS: \n -v | --verbose \n -h | --help \n -n | --dry-run \n -p | --prune \n -f | --force \n -i | --image (ex. image or image:tag) \n"
+trap 'error_handler ${LINENO} $?' ERR
+
+set -o errexit
+set -o errtrace
+
+OPTS=`getopt -o vhnfpui: --long verbose,help,dry-run,force,prune,untagged,image: -n 'parse-options' -- "$@"`
+
+USAGE="Usage: \ndelete_docker_registry_image --image testrepo/awesomeimage\nor\ndelete_docker_registry_image --image testrepo/awesomeimage:killertag \n\nOPTIONS: \n -v | --verbose \n -h | --help \n -n | --dry-run \n -p | --prune \n -u | --untagged \n -f | --force \n -i | --image (ex. image or image:tag) \n"
 
 if [ $? != 0 ] ; then echo -e "Failed parsing options. \n\n$USAGE" >&2 ; exit 1 ; fi
 
@@ -18,6 +28,7 @@ HELP=false
 FORCE=false
 DRY_RUN=false
 PRUNE=false
+UNTAGGED=false
 
 while true; do
   case "$1" in
@@ -26,6 +37,7 @@ while true; do
     -n | --dry-run ) DRY_RUN=true; shift ;;
     -f | --force ) FORCE=true; shift ;;
     -p | --prune ) PRUNE=true; shift ;;
+    -u | --untagged ) UNTAGGED=true; shift ;;
     -i | --image ) IMAGE="$2"; shift; shift ;;
     -- ) shift; break ;;
     * ) break ;;
@@ -114,9 +126,141 @@ fi
 
 repo_dir="${repositories_dir}/${REPO}"
 layers_dir="${repo_dir}/_layers/sha256"
+dir_for_revisions="${repositories_dir}/${REPO}/_manifests/revisions"
+dir_for_tags="${repo_dir}/_manifests/tags"
 
-# code for deleting an entire repo
-if [[ -z $TAG_IDENTIFIER ]]; then
+element_in () {
+  local e
+  for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 0; done
+  return 1
+}
+
+layers_for_revision () {
+  layers_for_revision_rev=$1
+  directory_prefix=${layers_for_revision_rev:0:2}
+
+  layers_for_given_revision=()
+
+  for filesystem_layer_sha256 in $(cat blobs/sha256/${directory_prefix}/${layers_for_revision_rev}/data  | jq -r '.fsLayers | map(.blobSum)[]' | sort | uniq); do
+    digest=$(echo $filesystem_layer_sha256 | sed -e 's/sha256://g')
+    layers_for_given_revision+=("$digest")
+  done
+
+  unique_layers_for_given_revision=$(echo "${layers_for_given_revision[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+  echo "${unique_layers_for_given_revision[@]}"
+}
+
+check_for_jq () {
+  if ! hash jq 2>/dev/null; then
+    echo "Sorry about this, but the jq program is required to delete tags. https://stedolan.github.io/jq/download/"
+    exit 1
+  fi
+}
+
+delete_from_tag_index_for_revision () {
+  delete_from_tag_index_for_revision_rev=$1
+  stuff_to_delete="${dir_for_tags}/*/index/sha256/$delete_from_tag_index_for_revision_rev"
+  if ls $stuff_to_delete > /dev/null 2>&1; then
+    if $DRY_RUN; then
+      echo "DRY_RUN: would have deleted from tag index a revision we were deleting: $revision_to_delete"
+    else
+      rm -rf $stuff_to_delete
+    fi
+  fi
+}
+
+delete_revisions () {
+  for revision_to_delete in "${revisions_to_delete[@]}"; do
+    link_files_for_manifest_revision=$(find ${revision_to_delete} -name link)
+
+    for file in $link_files_for_manifest_revision; do
+      digest_for_manifest_revision=($(cat $file | sed -e 's/sha256://g'))
+      delete_from_tag_index_for_revision $digest_for_manifest_revision
+      blobs_to_delete+=("${digest_for_manifest_revision}")
+    done
+
+    if $DRY_RUN; then
+      echo "DRY_RUN: would have deleted manifest revision: $revision_to_delete"
+    else
+      rm -rf $revision_to_delete
+    fi
+  done
+}
+
+if $UNTAGGED; then
+  if [[ -z $TAG_IDENTIFIER ]]; then
+    check_for_jq
+
+    layers_to_protect=()
+    all_tagged_link_files=$(find ${repositories_dir} -name link | grep current)
+    for file in $all_tagged_link_files; do
+      rev=$(cat $file | sed -e 's/sha256://g')
+      for layer_to_protect in $(layers_for_revision $rev); do
+        layers_to_protect+=("$layer_to_protect")
+      done
+    done
+
+    unique_layers_to_protect=($(printf "%s\n" "${layers_to_protect[@]}" | sort -u))
+
+    if $VERBOSE; then
+      for layer_to_protect in "${unique_layers_to_protect[@]}"; do
+        echo "layer_to_protect: $layer_to_protect"
+      done
+    fi
+
+    tagged_revisions=()
+    current_link_files=$(find ${repo_dir} -name link | grep current)
+
+    for file in $current_link_files; do
+      sha256=$(cat $file | sed -e 's/sha256://g')
+      tagged_revisions+=("${sha256}")
+    done
+
+    layers_to_delete=()
+    revisions=$(ls "$dir_for_revisions/sha256/")
+    revisions_to_delete=()
+    for rev in $revisions; do
+      if ! element_in $rev "${tagged_revisions[@]}"; then
+        revisions_to_delete+=("${rev}")
+
+        for layer_to_possibly_delete in $(layers_for_revision $rev); do
+          if element_in $layer_to_possibly_delete "${unique_layers_to_protect[@]}"; then
+            echo
+          else
+            layers_to_delete+=("${layer_to_possibly_delete}")
+          fi
+        done
+      fi
+    done
+    unique_layers_to_delete=($(printf "%s\n" "${layers_to_delete[@]}" | sort -u))
+
+    if $VERBOSE; then
+      for layer in "${unique_layers_to_delete[@]}"; do
+        echo "layer to delete: $layer"
+      done
+    fi
+
+    blobs_to_delete=("${unique_layers_to_delete[@]}")
+
+    revs_to_delete=("${revisions_to_delete[@]}")
+
+    # set up this array for use in delete_revisions
+    revisions_to_delete=()
+    for just_rev in $revs_to_delete; do
+      revisions_to_delete+=("$dir_for_revisions/sha256/$just_rev")
+    done
+
+    delete_revisions # adds more blobs_to_delete
+    delete_blobs
+    layer_digests_not_used_in_this_repo=("${unique_layers_to_delete[@]}")
+    delete_layers_no_longer_used_by_this_repo
+    prune_it_baby
+  else
+    echo "Please don't specify a tag when deleting all untagged revisions in a repo. Just specify the repo."
+    exit 1
+  fi
+# if there is no TAG_IDENTIFIER, then we want the code for deleting an entire repo
+elif [[ -z $TAG_IDENTIFIER ]]; then
   if $VERBOSE; then
     echo "Deleting repo: $IMAGE"
   fi
@@ -161,8 +305,8 @@ if [[ -z $TAG_IDENTIFIER ]]; then
   fi
   # end code for deleting an entire repo
 else
+  check_for_jq
   # user wanted to delete a specific tag, not an entire repo/image
-  dir_for_tags="${repo_dir}/_manifests/tags"
   dir_for_tag="${dir_for_tags}/${TAG_IDENTIFIER}"
 
   if [[ ! -d "${dir_for_tag}" ]]; then
@@ -177,22 +321,16 @@ else
     manifest_digests+=($(cat $file | sed -e 's/sha256://g'))
   done
 
-  unique_manifest_digests=$(echo "${manifest_digests[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
-  dir_for_revisions="${repositories_dir}/${REPO}/_manifests/revisions"
-  manifest_revisions_to_delete=()
-
-  if ! hash jq 2>/dev/null; then
-    echo "Sorry about this, but the jq program is required to delete tags. https://stedolan.github.io/jq/download/"
-    exit 1
-  fi
+  unique_manifest_digests=($(printf "%s\n" "${manifest_digests[@]}" | sort -u))
+  revisions_to_delete=()
 
   layer_digests_for_tag=()
 
-  for manifest_digest in ${unique_manifest_digests[@]}; do
+  for manifest_digest in "${unique_manifest_digests[@]}"; do
     if $VERBOSE; then
       echo "Looking up fileystem layers for manifest digest $manifest_digest"
     fi
-    manifest_revisions_to_delete+=("$dir_for_revisions/sha256/$manifest_digest")
+    revisions_to_delete+=("$dir_for_revisions/sha256/$manifest_digest")
     directory_prefix=${manifest_digest:0:2}
 
     for filesystem_layer_sha256 in $(cat blobs/sha256/${directory_prefix}/${manifest_digest}/data  | jq -r '.fsLayers | map(.blobSum)[]' | sort | uniq); do
@@ -201,26 +339,28 @@ else
     done
   done
 
-  unique_layer_digests_for_tag=$(echo "${layer_digests_for_tag[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+  unique_layer_digests_for_tag=($(printf "%s\n" "${layer_digests_for_tag[@]}" | sort -u))
 
   layer_digests_not_used_in_this_repo=()
 
-  for digest in ${unique_layer_digests_for_tag[@]}; do
+  for digest in "${unique_layer_digests_for_tag[@]}"; do
     digest_in_use_in_same_repo=false
 
-    for tag_subdir in $(ls $dir_for_tags | grep -v $TAG_IDENTIFIER); do
-      manifest_digest_for_tag=$(cat "${dir_for_tags}/${tag_subdir}/current/link" | sed -e 's/sha256://g')
-      directory_prefix_for_tag_digest=${manifest_digest_for_tag:0:2}
-      for filesystem_layer_sha256_for_tag in $(cat blobs/sha256/${directory_prefix_for_tag_digest}/${manifest_digest_for_tag}/data  | jq -r '.fsLayers | map(.blobSum)[]' | sort | uniq); do
-        used_digest=$(echo $filesystem_layer_sha256_for_tag | sed -e 's/sha256://g')
-        if [ "$used_digest" == "$digest" ]; then
-          digest_in_use_in_same_repo=true
-          another_tag_using=$tag_subdir
-          at_least_one_blob_was_used_elsewhere=true
-          break 2 # break out of 'for tag_subdir' loop completely
-        fi
+    if ls $dir_for_tags | grep -v $TAG_IDENTIFIER; then # check if there are any other tags first
+      for tag_subdir in $(ls $dir_for_tags | grep -v $TAG_IDENTIFIER); do
+        manifest_digest_for_tag=$(cat "${dir_for_tags}/${tag_subdir}/current/link" | sed -e 's/sha256://g')
+        directory_prefix_for_tag_digest=${manifest_digest_for_tag:0:2}
+        for filesystem_layer_sha256_for_tag in $(cat blobs/sha256/${directory_prefix_for_tag_digest}/${manifest_digest_for_tag}/data  | jq -r '.fsLayers | map(.blobSum)[]' | sort | uniq); do
+          used_digest=$(echo $filesystem_layer_sha256_for_tag | sed -e 's/sha256://g')
+          if [ "$used_digest" == "$digest" ]; then
+            digest_in_use_in_same_repo=true
+            another_tag_using=$tag_subdir
+            at_least_one_blob_was_used_elsewhere=true
+            break 2 # break out of 'for tag_subdir' loop completely
+          fi
+        done
       done
-    done
+    fi
 
     # if it's being used in the same repo, there's no need to check other repos. we're not deleting the blob.
     if [[ $digest_in_use_in_same_repo == false ]]; then
@@ -256,21 +396,7 @@ else
       rm -rf $dir_for_tag
     fi
 
-    for manifest_revision_to_delete in "${manifest_revisions_to_delete[@]}"; do
-      link_files_for_manifest_revision=$(find ${manifest_revision_to_delete} -name link)
-
-      for file in $link_files_for_manifest_revision; do
-        digest_for_manifest_revision=($(cat $file | sed -e 's/sha256://g'))
-        blobs_to_delete+=("${digest_for_manifest_revision}")
-      done
-
-      if $DRY_RUN; then
-        echo "DRY_RUN: would have deleted manifest revision: $manifest_revision_to_delete"
-      else
-        rm -rf $manifest_revision_to_delete
-      fi
-    done
-
+    delete_revisions
     delete_blobs
     delete_layers_no_longer_used_by_this_repo
     prune_it_baby

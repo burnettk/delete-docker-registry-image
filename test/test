@@ -35,11 +35,18 @@ function assert_that_registry_has_no_data() {
   [ "$(ls -A /opt/registry_data/docker/registry/v2)" ] && echo "ASSERTION FAILURE: registry has data when we expected it not to have data" && exit 1 || :
 }
 
-function build_and_push_test_image() {
+function build_test_image() {
   previous_location=$PWD
   cd test/fixtures/$1
   image=$(cat image)
   docker build -t $image .
+  cd $previous_location
+}
+
+function push_test_image() {
+  previous_location=$PWD
+  cd test/fixtures/$1
+  image=$(cat image)
   docker push $image
   cd $previous_location
 }
@@ -50,12 +57,18 @@ function push_all_test_images() {
   done
 }
 
-function push_test_images() {
+function build_test_images() {
   for test_image in "$@"; do
-    build_and_push_test_image $test_image
+    build_test_image $test_image
   done
 }
 
+function build_and_push_test_images() {
+  for test_image in "$@"; do
+    build_test_image $test_image
+    push_test_image $test_image
+  done
+}
 
 function delete_all_test_data() {
   for id in $(get_test_docker_container_ids); do docker stop $id; done
@@ -69,7 +82,7 @@ function run_delete() {
 
 function test_deleting_all_images_deletes_all_date() {
   setup
-  push_test_images a b
+  build_and_push_test_images a b
 
   docker tag localhost:5000/test/a localhost:5000/test/somethingwithtag:1
   docker push localhost:5000/test/somethingwithtag:1
@@ -90,9 +103,45 @@ function test_deleting_all_images_deletes_all_date() {
   assert_that_registry_has_no_data
 }
 
+function test_deleting_untagged() {
+  setup
+  build_test_images a b c
+
+  docker tag localhost:5000/test/b localhost:5000/test/repousinglatest
+  docker push localhost:5000/test/repousinglatest
+
+  docker tag -f localhost:5000/test/a localhost:5000/test/repousinglatest
+  docker push localhost:5000/test/repousinglatest
+
+  docker tag -f localhost:5000/test/c:1 localhost:5000/test/repousinglatest
+  docker push localhost:5000/test/repousinglatest
+
+  before=$(find /opt/registry_data/docker/registry/v2/blobs -type f | wc -l)
+  run_delete --image test/repousinglatest --force --prune --untagged
+  after=$(find /opt/registry_data/docker/registry/v2/blobs -type f | wc -l)
+
+  if [ ! "$after" -lt "$before" ]; then
+    echo "After deleting --untagged, the number of blobs is unchanged: before: $before. after: $after"
+    exit 1
+  fi
+
+  delete_test_docker_images
+
+  docker pull localhost:5000/test/repousinglatest
+
+  if ! docker run -it localhost:5000/test/repousinglatest ls test | grep 'c' > /dev/null; then
+    echo "Did not see expected file (c) in container"
+    exit 1
+  fi
+
+  run_delete --image test/repousinglatest:latest --force --prune
+  delete_test_docker_images
+  assert_that_registry_has_no_data
+}
+
 function test_deleting_an_image_does_not_harm_an_equivalent_tag_in_another_repo() {
   setup
-  push_test_images a
+  build_and_push_test_images a
   docker tag localhost:5000/test/a localhost:5000/test/stillanotherthingwithtag:1
   docker push localhost:5000/test/stillanotherthingwithtag:1
   delete_test_docker_images
@@ -106,7 +155,7 @@ function test_deleting_an_image_does_not_harm_an_equivalent_tag_in_another_repo(
 
 function test_deleting_tag_first_does_not_leave_stuff_lying_around() {
   setup
-  push_test_images a
+  build_and_push_test_images a
   docker tag localhost:5000/test/a localhost:5000/test/somethingwithtag:1
   docker push localhost:5000/test/somethingwithtag:1
   run_delete --image test/somethingwithtag:1 --force --prune -v
@@ -118,7 +167,7 @@ function test_deleting_tag_first_does_not_leave_stuff_lying_around() {
 
 function test_deleting_by_tag() {
   setup
-  push_test_images c d
+  build_and_push_test_images c d
   run_delete --image test/c:1 --force --prune
   delete_test_docker_images
   docker pull localhost:5000/test/c:2 # we haven't deleted d (c:2) from the registry yet. confirm that we can pull it with no issue.
@@ -128,7 +177,7 @@ function test_deleting_by_tag() {
 
 function test_deleting_actually_deletes() {
   setup
-  push_test_images c
+  build_and_push_test_images c
   run_delete --image test/c:1 --force --prune
   delete_test_docker_images
   if docker pull localhost:5000/test/c:1; then
@@ -140,7 +189,7 @@ function test_deleting_actually_deletes() {
 
 function test_deleting_with_dry_run_does_not_delete() {
   setup
-  push_test_images c
+  build_and_push_test_images c
   run_delete --image test/c:1 --force --prune --dry-run
   delete_test_docker_images
   docker pull localhost:5000/test/c:1
@@ -155,7 +204,7 @@ function test_deleting_with_no_image_argument_tells_you_to_try_again() {
     echo "Did not receive expected error message when trying to delete before adding a repo"
     exit 1
   fi
-  push_test_images a
+  build_and_push_test_images a
   if run_delete | grep 'Please specify an image to delete'; then
     echo "Yep, we expected this error message"
   else
@@ -175,6 +224,7 @@ function setup() {
   bounce_registry
 }
 
+test_deleting_untagged
 test_deleting_all_images_deletes_all_date
 test_deleting_tag_first_does_not_leave_stuff_lying_around
 test_deleting_an_image_does_not_harm_an_equivalent_tag_in_another_repo
