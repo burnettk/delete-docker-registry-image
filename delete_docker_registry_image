@@ -1,406 +1,335 @@
-#!/bin/bash
+#!/usr/bin/env python
+"""
+Usage:
+Shut down your registry service to avoid race conditions and possible data loss
+and then run the command with an image repo like this:
+delete_docker_registry_image.py --image awesomeimage --dry-run
+"""
 
-# Usage:
-# Shut down your registry service to avoid race conditions and possible data loss
-# and then run the command with an image name like this:
-# delete_docker_registry_image --image testrepo/awesomeimage --dry-run
+import argparse
+import json
+import logging
+import os
+import sys
+import shutil
+import glob
 
-function error_handler() {
-  echo "Error occurred in script at line: ${1}."
-  echo "Line exited with status: ${2}"
-}
+def del_empty_dirs(s_dir):
+    """recursively delete empty directories"""
+    b_empty = True
 
-trap 'error_handler ${LINENO} $?' ERR
+    for s_target in os.listdir(s_dir):
+        s_path = os.path.join(s_dir, s_target)
+        if os.path.isdir(s_path):
+            if not del_empty_dirs(s_path):
+                b_empty = False
+        else:
+            b_empty = False
 
-set -o errexit
-set -o errtrace
+    if b_empty:
+        logging.debug("Deleting empty directory '%s'", s_dir)
+        os.rmdir(s_dir)
 
-OPTS=`getopt -o vhnfpui: --long verbose,help,dry-run,force,prune,untagged,image: -n 'parse-options' -- "$@"`
+    return b_empty
 
-USAGE="Usage: \ndelete_docker_registry_image --image testrepo/awesomeimage\nor\ndelete_docker_registry_image --image testrepo/awesomeimage:killertag \n\nOPTIONS: \n -v | --verbose \n -h | --help \n -n | --dry-run \n -p | --prune \n -u | --untagged \n -f | --force \n -i | --image (ex. image or image:tag) \n"
+def get_layers_from_blob(path):
+    """parse json blob and get set of layer digests"""
+    with open(path, "r") as blob:
+        data_raw = blob.read()
+        data = json.loads(data_raw)
+        return set([entry["blobSum"].split(":")[1] for entry in data["fsLayers"]])
 
-if [ $? != 0 ] ; then echo -e "Failed parsing options. \n\n$USAGE" >&2 ; exit 1 ; fi
+def get_digest_from_blob(path):
+    """parse file and get digest"""
+    with open(path, "r") as blob:
+        return blob.read().split(":")[1]
 
-eval set -- "$OPTS"
+def get_links(path, _filter=None):
+    """recursively walk `path` and parse every link inside"""
+    result = []
+    for root, _, files in os.walk(path):
+        for each in files:
+            if each == "link":
+                filepath = os.path.join(root, each)
+                if not _filter or _filter in filepath:
+                    result.append(get_digest_from_blob(filepath))
+    return result
 
-VERBOSE=false
-HELP=false
-FORCE=false
-DRY_RUN=false
-PRUNE=false
-UNTAGGED=false
+class RegistryCleanerError(Exception): pass
 
-while true; do
-  case "$1" in
-    -v | --verbose ) VERBOSE=true; shift ;;
-    -h | --help )    HELP=true; shift ;;
-    -n | --dry-run ) DRY_RUN=true; shift ;;
-    -f | --force ) FORCE=true; shift ;;
-    -p | --prune ) PRUNE=true; shift ;;
-    -u | --untagged ) UNTAGGED=true; shift ;;
-    -i | --image ) IMAGE="$2"; shift; shift ;;
-    -- ) shift; break ;;
-    * ) break ;;
-  esac
-done
+class RegistryCleaner(object):
+    """Clean registry"""
+    def __init__(self, registry_data_dir, dry_run=False):
+        self.registry_data_dir = registry_data_dir
+        if not os.path.isdir(self.registry_data_dir):
+            raise RegistryCleanerError("No repositories directory found inside " \
+                                       "REGISTRY_DATA_DIR '{0}'.".
+                                       format(self.registry_data_dir))
+        self.dry_run = dry_run
 
-if $HELP; then
-  echo -e $USAGE
-  exit
-fi
+    def _delete_layer(self, repo, digest):
+        """remove blob directory from filesystem"""
+        path = os.path.join(self.registry_data_dir, "repositories", repo, "_layers/sha256", digest)
+        self._delete_dir(path)
 
-if [[ -z $REGISTRY_DATA_DIR ]]; then
-  REGISTRY_DATA_DIR=/opt/registry_data/docker/registry/v2
-  echo -e "Important:\nset REGISTRY_DATA_DIR as shell variable to one proper for your enviroment!\n  Currently it is: $REGISTRY_DATA_DIR\n"
-fi
+    def _delete_blob(self, digest):
+        """remove blob directory from filesystem"""
+        path = os.path.join(self.registry_data_dir, "blobs/sha256", digest[0:2], digest)
+        self._delete_dir(path)
 
-function delete_blobs() {
-  for blob_to_delete in "${blobs_to_delete[@]}"; do
-    directory_prefix_of_blob_to_delete=${blob_to_delete:0:2}
-    full_path_of_blob_to_delete="blobs/sha256/${directory_prefix_of_blob_to_delete}/${blob_to_delete}"
-    if $DRY_RUN; then
-      echo "DRY_RUN: would have deleted directory: $full_path_of_blob_to_delete"
-    else
-      rm -rf $full_path_of_blob_to_delete
-    fi
-  done
-}
+    def _get_layers_from_blob(self, digest):
+        """get layers from blob by digest"""
+        data_path = os.path.join(self.registry_data_dir, "blobs/sha256",
+                                 digest[0:2], digest, "data")
+        return get_layers_from_blob(data_path)
 
-function delete_layers_no_longer_used_by_this_repo() {
-  for layer_digest_not_used_in_this_repo in "${layer_digests_not_used_in_this_repo[@]}"; do
-    directory_to_delete=$layers_dir/$layer_digest_not_used_in_this_repo
-    if $DRY_RUN; then
-      echo "DRY_RUN: would have deleted layer metadata directory: $directory_to_delete"
-    else
-      rm -rf $directory_to_delete
-    fi
-  done
-}
 
-function prune_it_baby() {
-  if $PRUNE; then
-    if $DRY_RUN; then
-      echo "DRY_RUN: not pruning empty blob dirs"
-    else
-      echo Pruning empty directories under $REGISTRY_DATA_DIR
-      find $REGISTRY_DATA_DIR/* -type d -empty -delete
-    fi
-  fi
-}
+    def _delete_dir(self, path):
+        """remove directory from filesystem"""
+        if self.dry_run:
+            logging.info("DRY_RUN: would have deleted %s", path)
+        else:
+            logging.info("Deleting %s", path)
+            shutil.rmtree(path)
 
-function um_you_might_want_to_confirm_this() {
-  echo "This is maybe fine but a bit worrisome."
-  echo "None of the blobs that make up the image you want to delete were used by another image."
-  echo
-  echo "blobs are:"
-  printf "%s\n" "${blobs_to_delete[@]}"
-  echo
-  echo "Because of this, we're aborting the delete."
-  echo "If you're sure you actually want to delete this data, add a --force option"
-  exit 1
-}
+    def _delete_from_tag_index_for_revision(self, repo, digest):
+        """delete revision from tag indexes"""
+        paths = glob.glob(
+            os.path.join(self.registry_data_dir, "repositories", repo,
+                         "_manifests/tags/*/index/sha256", digest)
+        )
+        for path in paths:
+            self._delete_dir(path)
 
-cd $REGISTRY_DATA_DIR
+    def _delete_revisions(self, repo, revisions):
+        """delete revisions from list of directories"""
+        for revision_dir in revisions:
+            digests = get_links(revision_dir)
+            for digest in digests:
+                self._delete_from_tag_index_for_revision(repo, digest)
+                self._delete_blob(digest)
 
-repositories_dir="repositories"
-if [[ ! -d "${repositories_dir}" ]] ; then
-  SCRIPTDIR=$( cd $(dirname $0) ; pwd -P )
-  echo "No repositories directory found inside REGISTRY_DATA_DIR '$REGISTRY_DATA_DIR'. Set REGISTRY_DATA_DIR correctly in this script ($SCRIPTDIR/$0) or pass it in as an environment variable."
-  exit 1
-fi
+            self._delete_dir(revision_dir)
 
-if [[ -z $IMAGE ]]; then
-  echo -e "Please specify an image to delete. \n\n$USAGE"
-  exit 1
-fi
 
-TAG_SPLIT_ON_COLON=(${IMAGE//:/ })
-REPO=${TAG_SPLIT_ON_COLON[0]}
-TAG_IDENTIFIER=${TAG_SPLIT_ON_COLON[1]}
+    def _get_tags(self, repo):
+        """get all tags for given repository"""
+        path = os.path.join(self.registry_data_dir, "repositories", repo, "_manifests/tags")
+        if not os.path.isdir(path):
+            logging.critical("No repository '%s' found in repositories directory %s",
+                             repo, self.registry_data_dir)
+            return None
+        result = []
+        for each in os.listdir(path):
+            filepath = os.path.join(path, each)
+            if os.path.isdir(filepath):
+                result.append(each)
+        return result
 
-if $VERBOSE; then
-  echo "Image to delete: $IMAGE"
-  echo "Repo: $REPO"
-  echo "Tag: $TAG_IDENTIFIER"
-fi
+    def _get_repositories(self):
+        """get all repository repos"""
+        result = []
+        root = os.path.join(self.registry_data_dir, "repositories")
+        for each in os.listdir(root):
+            filepath = os.path.join(root, each)
+            if os.path.isdir(filepath):
+                inside = os.listdir(filepath)
+                if "_layers" in inside:
+                    result.append(each)
+                else:
+                    for inner in inside:
+                        result.append(os.path.join(each, inner))
+        return result
 
-repo_dir="${repositories_dir}/${REPO}"
-layers_dir="${repo_dir}/_layers/sha256"
-dir_for_revisions="${repositories_dir}/${REPO}/_manifests/revisions"
-dir_for_tags="${repo_dir}/_manifests/tags"
+    def _get_all_links(self, except_repo=""):
+        """get links for every repository"""
+        result = []
+        repositories = self._get_repositories()
+        for repo in [r for r in repositories if r != except_repo]:
+            path = os.path.join(self.registry_data_dir, "repositories", repo)
+            for link in get_links(path):
+                result.append(link)
+        return result
 
-element_in () {
-  local e
-  for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 0; done
-  return 1
-}
+    def prune(self):
+        """delete all empty directories in registry_data_dir"""
+        del_empty_dirs(self.registry_data_dir)
 
-layers_for_revision () {
-  layers_for_revision_rev=$1
-  directory_prefix=${layers_for_revision_rev:0:2}
+    def _layer_in_same_repo(self, repo, tag, layer):
+        """check if layer is found in other tags of same repository"""
+        for tag in [t for t in self._get_tags(repo) if t != tag]:
+            path = os.path.join(self.registry_data_dir, "repositories", repo,
+                                "_manifests/tags", tag, "current/link")
+            manifest = get_digest_from_blob(path)
+            layers = self._get_layers_from_blob(manifest)
+            if layer in layers:
+                return True
+        return False
 
-  layers_for_given_revision=()
+    def delete_entire_repository(self, repo, force=False):
+        """delete all blobs for given repository repo"""
+        logging.debug("Deleting entire repository '%s'", repo)
+        repo_dir = os.path.join(self.registry_data_dir, "repositories", repo)
+        if not os.path.isdir(repo_dir):
+            raise RegistryCleanerError("No repository '{0}' found in repositories "\
+                                        "directory {1}/repositories".
+                                       format(repo, self.registry_data_dir))
+        links = set(get_links(repo_dir))
+        all_links_but_current = set(self._get_all_links(except_repo=repo))
+        at_least_one_blob_was_used_elsewhere = False
+        for layer in links:
+            if layer in all_links_but_current:
+                at_least_one_blob_was_used_elsewhere = True
+                logging.debug("Blob found in another repository. Not deleting: %s", layer)
+            else:
+                self._delete_blob(layer)
+        if at_least_one_blob_was_used_elsewhere or force:
+            self._delete_dir(repo_dir)
 
-  for filesystem_layer_sha256 in $(cat blobs/sha256/${directory_prefix}/${layers_for_revision_rev}/data  | jq -r '.fsLayers | map(.blobSum)[]' | sort | uniq); do
-    digest=$(echo $filesystem_layer_sha256 | sed -e 's/sha256://g')
-    layers_for_given_revision+=("$digest")
-  done
+    def delete_repository_tag(self, repo, tag, force=False):
+        """delete all blobs only for given tag of repository"""
+        logging.debug("Deleting repository '%s' with tag '%s'", repo, tag)
+        tag_dir = os.path.join(self.registry_data_dir, "repositories", repo, "_manifests/tags", tag)
+        if not os.path.isdir(tag_dir):
+            raise RegistryCleanerError("No repository '{0}' tag '{1}' found in repositories "\
+                                        "directory {2}/repositories".
+                                       format(repo, tag, self.registry_data_dir))
+        manifests = set(get_links(tag_dir))
+        revisions_to_delete = []
+        layers = []
+        for manifest in manifests:
+            logging.debug("Looking up fileystem layers for manifest digest %s", manifest)
+            revisions_to_delete.append(
+                os.path.join(self.registry_data_dir, "repositories", repo,
+                             "_manifests/revisions/sha256", manifest)
+            )
+            layers.extend(self._get_layers_from_blob(manifest))
 
-  unique_layers_for_given_revision=$(echo "${layers_for_given_revision[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
-  echo "${unique_layers_for_given_revision[@]}"
-}
+        layers_uniq = set(layers)
+        all_links_but_current = set(self._get_all_links(except_repo=repo))
+        at_least_one_blob_was_used_elsewhere = False
+        for layer in layers_uniq:
+            if self._layer_in_same_repo(repo, tag, layer):
+                logging.debug("Not deleting since we found another tag using digest: %s", layer)
+                continue
 
-check_for_jq () {
-  if ! hash jq 2>/dev/null; then
-    echo "Sorry about this, but the jq program is required to delete tags. https://stedolan.github.io/jq/download/"
-    exit 1
-  fi
-}
+            self._delete_layer(repo, layer)
+            if layer in all_links_but_current:
+                at_least_one_blob_was_used_elsewhere = True
+                logging.debug("Blob found in another repository. Not deleting: %s", layer)
+            else:
+                self._delete_blob(layer)
 
-delete_from_tag_index_for_revision () {
-  delete_from_tag_index_for_revision_rev=$1
-  stuff_to_delete="${dir_for_tags}/*/index/sha256/$delete_from_tag_index_for_revision_rev"
-  if ls $stuff_to_delete > /dev/null 2>&1; then
-    if $DRY_RUN; then
-      echo "DRY_RUN: would have deleted from tag index a revision we were deleting: $revision_to_delete"
-    else
-      rm -rf $stuff_to_delete
-    fi
-  fi
-}
+        self._delete_revisions(repo, revisions_to_delete)
+        if at_least_one_blob_was_used_elsewhere or force:
+            self._delete_dir(tag_dir)
 
-delete_revisions () {
-  for revision_to_delete in "${revisions_to_delete[@]}"; do
-    link_files_for_manifest_revision=$(find ${revision_to_delete} -name link)
+    def delete_untagged(self, repo):
+        """delete all untagged data from repo"""
+        logging.debug("Deleting utagged data from repository '%s'", repo)
+        repositories_dir = os.path.join(self.registry_data_dir, "repositories")
+        repo_dir = os.path.join(repositories_dir, repo)
+        if not os.path.isdir(repo_dir):
+            raise RegistryCleanerError("No repository '{0}' found in repositories "\
+                                        "directory {1}/repositories".
+                                       format(repo, self.registry_data_dir))
+        tagged_links = set(get_links(repositories_dir, _filter="current"))
+        layers_to_protect = []
+        for link in tagged_links:
+            layers_to_protect.extend(self._get_layers_from_blob(link))
 
-    for file in $link_files_for_manifest_revision; do
-      digest_for_manifest_revision=($(cat $file | sed -e 's/sha256://g'))
-      delete_from_tag_index_for_revision $digest_for_manifest_revision
-      blobs_to_delete+=("${digest_for_manifest_revision}")
-    done
+        unique_layers_to_protect = set(layers_to_protect)
+        for layer in unique_layers_to_protect:
+            logging.debug("layer_to_protect: %s", layer)
 
-    if $DRY_RUN; then
-      echo "DRY_RUN: would have deleted manifest revision: $revision_to_delete"
-    else
-      rm -rf $revision_to_delete
-    fi
-  done
-}
+        tagged_revisions = set(get_links(repo_dir, _filter="current"))
 
-if $UNTAGGED; then
-  if [[ -z $TAG_IDENTIFIER ]]; then
-    check_for_jq
 
-    layers_to_protect=()
-    all_tagged_link_files=$(find ${repositories_dir} -name link | grep current)
-    for file in $all_tagged_link_files; do
-      rev=$(cat $file | sed -e 's/sha256://g')
-      for layer_to_protect in $(layers_for_revision $rev); do
-        layers_to_protect+=("$layer_to_protect")
-      done
-    done
+        revisions_to_delete = []
+        layers_to_delete = []
 
-    unique_layers_to_protect=($(printf "%s\n" "${layers_to_protect[@]}" | sort -u))
+        dir_for_revisions = os.path.join(repo_dir, "_manifests/revisions/sha256")
+        for rev in os.listdir(dir_for_revisions):
+            if rev not in tagged_revisions:
+                revisions_to_delete.append(os.path.join(dir_for_revisions, rev))
+                for layer in self._get_layers_from_blob(rev):
+                    if layer not in unique_layers_to_protect:
+                        layers_to_delete.append(layer)
 
-    if $VERBOSE; then
-      for layer_to_protect in "${unique_layers_to_protect[@]}"; do
-        echo "layer_to_protect: $layer_to_protect"
-      done
-    fi
+        unique_layers_to_delete = set(layers_to_delete)
 
-    tagged_revisions=()
-    current_link_files=$(find ${repo_dir} -name link | grep current)
+        self._delete_revisions(repo, revisions_to_delete)
+        for layer in unique_layers_to_delete:
+            self._delete_blob(layer)
+            self._delete_layer(repo, layer)
 
-    for file in $current_link_files; do
-      sha256=$(cat $file | sed -e 's/sha256://g')
-      tagged_revisions+=("${sha256}")
-    done
 
-    layers_to_delete=()
-    revisions=$(ls "$dir_for_revisions/sha256/")
-    revisions_to_delete=()
-    for rev in $revisions; do
-      if ! element_in $rev "${tagged_revisions[@]}"; then
-        revisions_to_delete+=("${rev}")
+def main():
+    "cli entrypoint"
+    parser = argparse.ArgumentParser(description="Cleanup docker registry")
+    parser.add_argument("-e", "--exclude",
+                        dest="exclude",
+                        help="Regexp to exclude tags")
+    parser.add_argument("-i", "--image",
+                        dest="image",
+                        required=True,
+                        help="Docker image to cleanup")
+    parser.add_argument("-v", "--verbose",
+                        dest="verbose",
+                        action="store_true",
+                        help="verbose")
+    parser.add_argument("-n", "--dry-run",
+                        dest="dry_run",
+                        action="store_true",
+                        help="Dry run")
+    parser.add_argument("-f", "--force",
+                        dest="force",
+                        action="store_true",
+                        help="Force run")
+    parser.add_argument("-p", "--prune",
+                        dest="prune",
+                        action="store_true",
+                        help="Prune")
+    parser.add_argument("-u", "--untagged",
+                        dest="untagged",
+                        action="store_true",
+                        help="Delete all untagged blobs for image")
+    args = parser.parse_args()
 
-        for layer_to_possibly_delete in $(layers_for_revision $rev); do
-          if element_in $layer_to_possibly_delete "${unique_layers_to_protect[@]}"; then
-            echo
-          else
-            layers_to_delete+=("${layer_to_possibly_delete}")
-          fi
-        done
-      fi
-    done
-    unique_layers_to_delete=($(printf "%s\n" "${layers_to_delete[@]}" | sort -u))
+    if args.verbose:
+        logging_level = logging.DEBUG
+    else:
+        logging_level = logging.INFO
+    logging.basicConfig(format=u'%(levelname)-8s [%(asctime)s]  %(message)s', level=logging_level)
 
-    if $VERBOSE; then
-      for layer in "${unique_layers_to_delete[@]}"; do
-        echo "layer to delete: $layer"
-      done
-    fi
+    splitted = args.image.split(":")
+    if len(splitted) == 2:
+        image = splitted[0]
+        tag = splitted[1]
+    else:
+        image = args.image
+        tag = None
 
-    blobs_to_delete=("${unique_layers_to_delete[@]}")
+    if 'REGISTRY_DATA_DIR' in os.environ:
+        registry_data_dir = os.environ['REGISTRY_DATA_DIR']
+    else:
+        registry_data_dir = "/opt/registry_data/docker/registry/v2"
 
-    revs_to_delete=("${revisions_to_delete[@]}")
+    try:
+        cleaner = RegistryCleaner(registry_data_dir, dry_run=args.dry_run)
+        if args.untagged:
+            cleaner.delete_untagged(image)
+        else:
+            if tag:
+                cleaner.delete_repository_tag(image, tag, force=args.force)
+            else:
+                cleaner.delete_entire_repository(image, force=args.force)
 
-    # set up this array for use in delete_revisions
-    revisions_to_delete=()
-    for just_rev in $revs_to_delete; do
-      revisions_to_delete+=("$dir_for_revisions/sha256/$just_rev")
-    done
+        if args.prune:
+            cleaner.prune()
+    except RegistryCleanerError as error:
+        logging.fatal(error)
+        sys.exit(1)
 
-    delete_revisions # adds more blobs_to_delete
-    delete_blobs
-    layer_digests_not_used_in_this_repo=("${unique_layers_to_delete[@]}")
-    delete_layers_no_longer_used_by_this_repo
-    prune_it_baby
-  else
-    echo "Please don't specify a tag when deleting all untagged revisions in a repo. Just specify the repo."
-    exit 1
-  fi
-# if there is no TAG_IDENTIFIER, then we want the code for deleting an entire repo
-elif [[ -z $TAG_IDENTIFIER ]]; then
-  if $VERBOSE; then
-    echo "Deleting repo: $IMAGE"
-  fi
-  repository_dir_for_image="${repositories_dir}/${IMAGE}"
-  if [[ ! -d "${repo_dir}" ]] ; then
-    echo "No repository '$REPO' found in repositories directory $REGISTRY_DATA_DIR/$repositories_dir"
-    exit 1
-  fi
-
-  blobs_to_delete=()
-  link_files=$(find ${repo_dir} -name link)
-  at_least_one_blob_was_used_elsewhere=false
-  for file in $link_files; do
-    sha256=$(cat $file | sed -e 's/sha256://g')
-
-    # i'm not sure if this egrep with the ./ prefix is super-portable, but it works for me
-    # and i want to be careful not to ignore another repo that might be using this blob
-    if find ./${repositories_dir} -name link | grep $sha256/link | egrep -v "^./${repo_dir}" > /dev/null
-    then
-      at_least_one_blob_was_used_elsewhere=true
-      if $VERBOSE; then
-        echo "Blob found in another repository. not deleting: $sha256"
-      fi
-    else
-      blobs_to_delete+=("${sha256}")
-      if $VERBOSE; then
-        echo "Blob not found in another repository. Marking for deletion: $sha256"
-      fi
-    fi
-  done
-
-  if [[ $at_least_one_blob_was_used_elsewhere == true || $FORCE == true ]]; then
-    if $DRY_RUN; then
-      echo "DRY_RUN: would have deleted repository directory: $repo_dir"
-    else
-      rm -rf $repo_dir
-    fi
-    delete_blobs
-    prune_it_baby
-  else
-    um_you_might_want_to_confirm_this
-  fi
-  # end code for deleting an entire repo
-else
-  check_for_jq
-  # user wanted to delete a specific tag, not an entire repo/image
-  dir_for_tag="${dir_for_tags}/${TAG_IDENTIFIER}"
-
-  if [[ ! -d "${dir_for_tag}" ]]; then
-    echo "No tag found in '${dir_for_tag}'"
-    exit 1
-  fi
-
-  link_files=$(find ${dir_for_tag}/index/sha256 -name link)
-
-  manifest_digests=()
-  for file in $link_files; do
-    manifest_digests+=($(cat $file | sed -e 's/sha256://g'))
-  done
-
-  unique_manifest_digests=($(printf "%s\n" "${manifest_digests[@]}" | sort -u))
-  revisions_to_delete=()
-
-  layer_digests_for_tag=()
-
-  for manifest_digest in "${unique_manifest_digests[@]}"; do
-    if $VERBOSE; then
-      echo "Looking up fileystem layers for manifest digest $manifest_digest"
-    fi
-    revisions_to_delete+=("$dir_for_revisions/sha256/$manifest_digest")
-    directory_prefix=${manifest_digest:0:2}
-
-    for filesystem_layer_sha256 in $(cat blobs/sha256/${directory_prefix}/${manifest_digest}/data  | jq -r '.fsLayers | map(.blobSum)[]' | sort | uniq); do
-      digest=$(echo $filesystem_layer_sha256 | sed -e 's/sha256://g')
-      layer_digests_for_tag+=("$digest")
-    done
-  done
-
-  unique_layer_digests_for_tag=($(printf "%s\n" "${layer_digests_for_tag[@]}" | sort -u))
-
-  layer_digests_not_used_in_this_repo=()
-
-  for digest in "${unique_layer_digests_for_tag[@]}"; do
-    digest_in_use_in_same_repo=false
-
-    if ls $dir_for_tags | grep -v $TAG_IDENTIFIER; then # check if there are any other tags first
-      for tag_subdir in $(ls $dir_for_tags | grep -v $TAG_IDENTIFIER); do
-        manifest_digest_for_tag=$(cat "${dir_for_tags}/${tag_subdir}/current/link" | sed -e 's/sha256://g')
-        directory_prefix_for_tag_digest=${manifest_digest_for_tag:0:2}
-        for filesystem_layer_sha256_for_tag in $(cat blobs/sha256/${directory_prefix_for_tag_digest}/${manifest_digest_for_tag}/data  | jq -r '.fsLayers | map(.blobSum)[]' | sort | uniq); do
-          used_digest=$(echo $filesystem_layer_sha256_for_tag | sed -e 's/sha256://g')
-          if [ "$used_digest" == "$digest" ]; then
-            digest_in_use_in_same_repo=true
-            another_tag_using=$tag_subdir
-            at_least_one_blob_was_used_elsewhere=true
-            break 2 # break out of 'for tag_subdir' loop completely
-          fi
-        done
-      done
-    fi
-
-    # if it's being used in the same repo, there's no need to check other repos. we're not deleting the blob.
-    if [[ $digest_in_use_in_same_repo == false ]]; then
-      if $VERBOSE; then
-        echo "Blob not required by this repo. checking to make sure no other repos are using it"
-      fi
-      layer_digests_not_used_in_this_repo+=($digest)
-      # i'm not sure if this egrep with the ./ prefix is super-portable, but it works for me
-      # and i want to be careful not to ignore another repo that might be using this blob
-      if find ./${repositories_dir} -name link | grep $digest/link | egrep -v "^./${dir_for_tag}" | egrep -v "^./${layers_dir}" > /dev/null
-      then
-        at_least_one_blob_was_used_elsewhere=true
-        if $VERBOSE; then
-          echo "Blob found in another repository. not deleting: $digest"
-        fi
-      else
-        blobs_to_delete+=("${digest}")
-        if $VERBOSE; then
-          echo "Blob not found in another repository or sibling tag. Marking for deletion: $digest"
-        fi
-      fi
-    else
-      if $VERBOSE; then
-        echo "Not deleting since we found another tag using digest: $digest. tag was: $another_tag_using"
-      fi
-    fi
-  done # end for each filesystem layer digest
-
-  if [[ $at_least_one_blob_was_used_elsewhere == true || $FORCE == true ]]; then
-    if $DRY_RUN; then
-      echo "DRY_RUN: would have deleted tag directory: $dir_for_tag"
-    else
-      rm -rf $dir_for_tag
-    fi
-
-    delete_revisions
-    delete_blobs
-    delete_layers_no_longer_used_by_this_repo
-    prune_it_baby
-  else
-    um_you_might_want_to_confirm_this
-  fi
-fi
+if __name__ == "__main__":
+    main()

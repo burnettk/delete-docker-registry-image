@@ -198,14 +198,14 @@ function test_deleting_with_dry_run_does_not_delete() {
 }
 
 function test_deleting_with_no_image_argument_tells_you_to_try_again() {
-  if run_delete | grep 'No repositories directory found inside REGISTRY_DATA_DIR'; then
+  if run_delete --image test 2>&1 | grep 'No repositories directory found inside REGISTRY_DATA_DIR'; then
     echo "Yep, we expected this error message before adding a repo"
   else
     echo "Did not receive expected error message when trying to delete before adding a repo"
     exit 1
   fi
   build_and_push_test_images a
-  if run_delete | grep 'Please specify an image to delete'; then
+  if run_delete 2>&1 | grep 'image is required'; then
     echo "Yep, we expected this error message"
   else
     echo "Did not receive expected error message when trying to delete with no image argument"
