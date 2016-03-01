@@ -14,21 +14,22 @@ import sys
 import shutil
 import glob
 
-def del_empty_dirs(s_dir):
+def del_empty_dirs(s_dir, top_level):
     """recursively delete empty directories"""
     b_empty = True
 
     for s_target in os.listdir(s_dir):
         s_path = os.path.join(s_dir, s_target)
         if os.path.isdir(s_path):
-            if not del_empty_dirs(s_path):
+            if not del_empty_dirs(s_path, False):
                 b_empty = False
         else:
             b_empty = False
 
     if b_empty:
         logging.debug("Deleting empty directory '%s'", s_dir)
-        os.rmdir(s_dir)
+        if not top_level:
+          os.rmdir(s_dir)
 
     return b_empty
 
@@ -153,7 +154,7 @@ class RegistryCleaner(object):
 
     def prune(self):
         """delete all empty directories in registry_data_dir"""
-        del_empty_dirs(self.registry_data_dir)
+        del_empty_dirs(self.registry_data_dir, True)
 
     def _layer_in_same_repo(self, repo, tag, layer):
         """check if layer is found in other tags of same repository"""
