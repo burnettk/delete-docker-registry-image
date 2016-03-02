@@ -1,46 +1,83 @@
-#!/usr/bin/python
-import requests
-import sys
+#!/usr/bin/env python
+from __future__ import print_function
 import re
 import subprocess
+import argparse
+from distutils.version import LooseVersion
+import requests
 
-registry_url = "https://your-docker-registry"
-username = "username"
-password = "password"
+def main():
+    "cli entrypoint"
+    parser = argparse.ArgumentParser(description="Cleanup docker registry")
+    parser.add_argument("-e", "--exclude",
+                        dest="exclude",
+                        help="Regexp to exclude tags")
+    parser.add_argument("-E", "--include",
+                        dest="include",
+                        help="Regexp to include tags")
+    parser.add_argument("-i", "--image",
+                        dest="image",
+                        required=True,
+                        help="Docker image to cleanup")
+    parser.add_argument("-v", "--verbose",
+                        dest="verbose",
+                        action="store_true",
+                        help="verbose")
+    parser.add_argument("-u", "--registry-url",
+                        dest="registry_url",
+                        default="http://localhost",
+                        help="Registry URL")
+    parser.add_argument("-l", "--last",
+                        dest="last",
+                        default=5,
+                        type=int,
+                        help="Keep last N tags")
+    parser.add_argument("-U", "--user",
+                        dest="user",
+                        help="User for auth")
+    parser.add_argument("-P", "--password",
+                        dest="password",
+                        help="Password for auth")
+    args = parser.parse_args()
 
-if len(sys.argv) != 4:
-    print "Usage: " + sys.argv[0] + " reg_exp_of_repository_to_find reg_exp_of_tag_to_find history_to_maintain"
-    print "Example: " + sys.argv[0] + " '^repo/sitor*' '^0.1.*' 2"
-    sys.exit(0)
 
-repos2find = sys.argv[1]
-tags2find = sys.argv[2]
-history2maintain = int(sys.argv[3])
+    # Get catalog
+    if args.user and args.password:
+        auth = (args.user, args.password)
+    else:
+        auth = None
+    response = requests.get(args.registry_url + "/v2/_catalog",
+                            auth=auth, verify=False)
+    repositories = response.json()["repositories"]
+    # For each repository check it matches with args.image
+    for repository in repositories:
+        if re.search(args.image, repository):
+            # Get tags
+            response = requests.get(args.registry_url + "/v2/" + repository + "/tags/list",
+                                    auth=auth, verify=False)
+            tags = response.json()["tags"]
+            # For each tag, check it does not matches with args.exclude
+            matching_tags = []
+            for tag in tags:
+                if not args.exclude or not re.search(args.exclude, tag):
+                    if not args.include or re.search(args.include, tag):
+                        matching_tags.append(tag)
 
-# Get catalog
-r = requests.get(registry_url + "/v2/_catalog",
-                 auth=(username, password), verify=False)
-repositories = r.json()["repositories"]
-# For each repository check it matches with $1
-for repository in repositories:
-    if re.search(repos2find, repository):
-        # Get tags
-        r = requests.get(registry_url + "/v2/" + repository + "/tags/list",
-                         auth=(username, password), verify=False)
-        tags = r.json()["tags"]
-        # For each tag, check it matches with $2
-        matching_tags = []
-        for tag in tags:
-            if re.search(tags2find, tag):
-                matching_tags.append(tag)
+            # Sort tags
+            matching_tags.sort(key=lambda s: LooseVersion(re.sub('[^0-9.]', '9', s)))
 
-        # Sort tags
-        # http://stackoverflow.com/questions/2574080/sorting-a-list-of-version-strings
-        # but ... the format will be always (\d\.\d\.\d\./?
-        # matching_tags.sort(key=lambda s: map(int, s.split('.')))
+            # Delete all except N last items
+            if args.last > 0:
+                tags_to_delete = matching_tags[:-args.last]
+            else:
+                tags_to_delete = matching_tags
+            for tag in tags_to_delete:
+                command2run = "/usr/local/bin/delete_docker_registry_image --image {0}:{1}".\
+                              format(repository, tag)
+                print("Running: {0}".format(command2run))
+                out = subprocess.Popen(command2run, shell=True, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT).stdout.read()
+                print(out)
 
-        # Delete all except $3 last items
-        for tag in matching_tags[:-history2maintain]:
-            command2run = "/usr/local/bin/delete_docker_registry_image --image " + repository + ":" + tag
-            print (("Deleting: " + command2run))
-            subprocess.Popen(command2run, shell=True, stdout=subprocess.PIPE).stdout.read()
+if __name__ == '__main__':
+    main()
