@@ -24,3 +24,17 @@ Actually delete a repo (remember to shut down your registry first):
 Delete one tag from a repo:
 
     delete_docker_registry_image --image testrepo/awesomeimage:supertag
+
+
+## clean_old_version.py
+
+This complimentary script is made to remove tags in repository based on
+regexp pattern.
+
+Usage:
+
+    ./clean_old_versions.py --image reg_exp_of_repository_to_find --include reg_exp_of_tag_to_find -l history_to_maintain
+
+Example:
+
+    ./clean_old_versions.py --image '^repo/sitor*' --include '^0.1.*' -l 2
