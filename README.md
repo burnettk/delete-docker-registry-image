@@ -49,10 +49,10 @@ Example:
 
 Known test-passing configurations:
  1. docker: 1.9.1, registry:2.2.1
- 2. docker: 1.10.2, registry:2.3.0
 
 Known test-failing configurations:
  1. docker: 1.10.2, registry:2.2.1
+ 2. docker: 1.10.2, registry:2.3.0
 
 When tests are run with a new docker daemon and an older registry,
 architecture-specific config files are created, but they are not referenced
