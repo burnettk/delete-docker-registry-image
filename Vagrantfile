@@ -9,7 +9,8 @@ Vagrant.configure(2) do |config|
   config.vm.hostname = name
 
   config.vm.provision :docker do |d|
-     # d.version = "1.10.2"
+    # d.version = "1.9.1"
+    d.version = "1.10.2"
   end
 
   # you will need to install a vagrant plugin first: vagrant plugin install vagrant-docker-compose

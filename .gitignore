@@ -1,1 +1,5 @@
 .vagrant
+.DS_Store
+Gemfile*
+Guardfile
+aliases.sh

@@ -42,6 +42,8 @@ def get_layers_from_blob(path):
             result = set([entry["blobSum"].split(":")[1] for entry in data["fsLayers"]])
         else:
             result = set([entry["digest"].split(":")[1] for entry in data["layers"]])
+            if "config" in data:
+                result.add(data["config"]["digest"].split(":")[1])
         return result
 
 def get_digest_from_blob(path):
@@ -281,9 +283,6 @@ class RegistryCleaner(object):
 def main():
     "cli entrypoint"
     parser = argparse.ArgumentParser(description="Cleanup docker registry")
-    parser.add_argument("-e", "--exclude",
-                        dest="exclude",
-                        help="Regexp to exclude tags")
     parser.add_argument("-i", "--image",
                         dest="image",
                         required=True,
@@ -299,7 +298,7 @@ def main():
     parser.add_argument("-f", "--force",
                         dest="force",
                         action="store_true",
-                        help="Force run")
+                        help="Force delete (deprecated)")
     parser.add_argument("-p", "--prune",
                         dest="prune",
                         action="store_true",
