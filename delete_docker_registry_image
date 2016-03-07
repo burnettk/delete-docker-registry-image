@@ -38,7 +38,11 @@ def get_layers_from_blob(path):
     with open(path, "r") as blob:
         data_raw = blob.read()
         data = json.loads(data_raw)
-        return set([entry["blobSum"].split(":")[1] for entry in data["fsLayers"]])
+        if data["schemaVersion"] == 1:
+            result = set([entry["blobSum"].split(":")[1] for entry in data["fsLayers"]])
+        else:
+            result = set([entry["digest"].split(":")[1] for entry in data["layers"]])
+        return result
 
 def get_digest_from_blob(path):
     """parse file and get digest"""
@@ -78,12 +82,18 @@ class RegistryCleaner(object):
         path = os.path.join(self.registry_data_dir, "blobs/sha256", digest[0:2], digest)
         self._delete_dir(path)
 
+    def _blob_path_for_revision(self, digest):
+        """where we can find the blob that contains the json describing this digest"""
+        return os.path.join(self.registry_data_dir, "blobs/sha256",
+                                 digest[0:2], digest, "data")
+
+    def _blob_path_for_revision_is_missing(self, digest):
+        """for each revision, there should be a blob describing it"""
+        return not os.path.isfile(self._blob_path_for_revision(digest))
+
     def _get_layers_from_blob(self, digest):
         """get layers from blob by digest"""
-        data_path = os.path.join(self.registry_data_dir, "blobs/sha256",
-                                 digest[0:2], digest, "data")
-        return get_layers_from_blob(data_path)
-
+        return get_layers_from_blob(self._blob_path_for_revision(digest))
 
     def _delete_dir(self, path):
         """remove directory from filesystem"""
@@ -162,9 +172,18 @@ class RegistryCleaner(object):
             path = os.path.join(self.registry_data_dir, "repositories", repo,
                                 "_manifests/tags", tag, "current/link")
             manifest = get_digest_from_blob(path)
-            layers = self._get_layers_from_blob(manifest)
-            if layer in layers:
-                return True
+            try:
+                layers = self._get_layers_from_blob(manifest)
+                if layer in layers:
+                    return True
+            except IOError:
+                if self._blob_path_for_revision_is_missing(manifest):
+                    logging.warn("Blob for digest %s does not exist. Deleting tag manifest: %s", manifest, tag)
+                    tag_dir = os.path.join(self.registry_data_dir, "repositories", repo,
+                                        "_manifests/tags", tag)
+                    self._delete_dir(tag_dir)
+                else:
+                    raise
         return False
 
     def delete_entire_repository(self, repo, force=False):
@@ -177,15 +196,12 @@ class RegistryCleaner(object):
                                        format(repo, self.registry_data_dir))
         links = set(get_links(repo_dir))
         all_links_but_current = set(self._get_all_links(except_repo=repo))
-        at_least_one_blob_was_used_elsewhere = False
         for layer in links:
             if layer in all_links_but_current:
-                at_least_one_blob_was_used_elsewhere = True
                 logging.debug("Blob found in another repository. Not deleting: %s", layer)
             else:
                 self._delete_blob(layer)
-        if at_least_one_blob_was_used_elsewhere or force:
-            self._delete_dir(repo_dir)
+        self._delete_dir(repo_dir)
 
     def delete_repository_tag(self, repo, tag, force=False):
         """delete all blobs only for given tag of repository"""
@@ -208,7 +224,6 @@ class RegistryCleaner(object):
 
         layers_uniq = set(layers)
         all_links_but_current = set(self._get_all_links(except_repo=repo))
-        at_least_one_blob_was_used_elsewhere = False
         for layer in layers_uniq:
             if self._layer_in_same_repo(repo, tag, layer):
                 logging.debug("Not deleting since we found another tag using digest: %s", layer)
@@ -216,14 +231,12 @@ class RegistryCleaner(object):
 
             self._delete_layer(repo, layer)
             if layer in all_links_but_current:
-                at_least_one_blob_was_used_elsewhere = True
                 logging.debug("Blob found in another repository. Not deleting: %s", layer)
             else:
                 self._delete_blob(layer)
 
         self._delete_revisions(repo, revisions_to_delete)
-        if at_least_one_blob_was_used_elsewhere or force:
-            self._delete_dir(tag_dir)
+        self._delete_dir(tag_dir)
 
     def delete_untagged(self, repo):
         """delete all untagged data from repo"""
@@ -296,6 +309,9 @@ def main():
                         action="store_true",
                         help="Delete all untagged blobs for image")
     args = parser.parse_args()
+
+    if args.force:
+        logging.info("You supplied the force switch, which is deprecated. It has no effect now, and the script defaults to doing what used to be only happen when force was true")
 
     if args.verbose:
         logging_level = logging.DEBUG

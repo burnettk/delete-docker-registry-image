@@ -1,0 +1,7 @@
+registry:
+  image: registry:2.1.1
+  container_name: registry
+  ports:
+    - 5000:5000
+  volumes:
+    - /opt/registry_data:/var/lib/registry

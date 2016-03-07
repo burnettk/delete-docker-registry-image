@@ -77,7 +77,7 @@ function delete_all_test_data() {
 }
 
 function run_delete() {
-  sudo /vagrant/delete-docker-registry-image/delete_docker_registry_image "$@"
+  sudo /vagrant/delete_docker_registry_image "$@"
 }
 
 function test_deleting_all_images_deletes_all_date() {

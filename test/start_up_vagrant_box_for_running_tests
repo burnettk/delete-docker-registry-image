@@ -1,0 +1,10 @@
+#!/bin/bash
+
+if vagrant plugin list | grep vagrant-docker-compose; then
+  echo "vagrant-docker-compose is already installed"
+else
+  echo "installing vagrant-docker-compose"
+  vagrant plugin install vagrant-docker-compose
+fi
+
+vagrant up
