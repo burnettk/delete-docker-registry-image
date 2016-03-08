@@ -313,7 +313,7 @@ def main():
         logging_level = logging.DEBUG
     else:
         logging_level = logging.INFO
-    logging.basicConfig(format=u'%(levelname)-8s [%(asctime)s]  %(message)s', level=logging_level)
+    logging.basicConfig(format=u'%(levelname)-8s [%(asctime)s]  %(message)s', level=logging_level, stream=sys.stdout)
 
     # make sure not to log before logging is setup. that'll hose your logging config.
     if args.force:
