@@ -316,7 +316,7 @@ def main():
         logging_level = logging.DEBUG
     else:
         logging_level = logging.INFO
-    logging.basicConfig(format=u'%(levelname)-8s [%(asctime)s]  %(message)s', level=logging_level)
+    logging.basicConfig(format=u'%(levelname)-8s [%(asctime)s]  %(message)s', level=logging_level, stream=sys.stdout)
 
     splitted = args.image.split(":")
     if len(splitted) == 2:
