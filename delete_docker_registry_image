@@ -309,14 +309,15 @@ def main():
                         help="Delete all untagged blobs for image")
     args = parser.parse_args()
 
-    if args.force:
-        logging.info("You supplied the force switch, which is deprecated. It has no effect now, and the script defaults to doing what used to be only happen when force was true")
-
     if args.verbose:
         logging_level = logging.DEBUG
     else:
         logging_level = logging.INFO
     logging.basicConfig(format=u'%(levelname)-8s [%(asctime)s]  %(message)s', level=logging_level)
+
+    # make sure not to log before logging is setup. that'll hose your logging config.
+    if args.force:
+        logging.info("You supplied the force switch, which is deprecated. It has no effect now, and the script defaults to doing what used to be only happen when force was true")
 
     splitted = args.image.split(":")
     if len(splitted) == 2:
