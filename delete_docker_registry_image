@@ -29,27 +29,37 @@ def del_empty_dirs(s_dir, top_level):
     if b_empty:
         logging.debug("Deleting empty directory '%s'", s_dir)
         if not top_level:
-          os.rmdir(s_dir)
+            os.rmdir(s_dir)
 
     return b_empty
 
 def get_layers_from_blob(path):
     """parse json blob and get set of layer digests"""
-    with open(path, "r") as blob:
-        data_raw = blob.read()
-        data = json.loads(data_raw)
-        if data["schemaVersion"] == 1:
-            result = set([entry["blobSum"].split(":")[1] for entry in data["fsLayers"]])
-        else:
-            result = set([entry["digest"].split(":")[1] for entry in data["layers"]])
-            if "config" in data:
-                result.add(data["config"]["digest"].split(":")[1])
-        return result
+    try:
+        with open(path, "r") as blob:
+            data_raw = blob.read()
+            data = json.loads(data_raw)
+            if data["schemaVersion"] == 1:
+                result = set([entry["blobSum"].split(":")[1] for entry in data["fsLayers"]])
+            else:
+                result = set([entry["digest"].split(":")[1] for entry in data["layers"]])
+                if "config" in data:
+                    result.add(data["config"]["digest"].split(":")[1])
+            return result
+    except Exception as error:
+        logging.critical("Failed to read layers from blob:%s", error)
+        return set()
+
 
 def get_digest_from_blob(path):
     """parse file and get digest"""
-    with open(path, "r") as blob:
-        return blob.read().split(":")[1]
+    try:
+        with open(path, "r") as blob:
+            return blob.read().split(":")[1]
+    except Exception as error:
+        logging.critical("Failed to read digest from blob:%s", error)
+        return ""
+
 
 def get_links(path, _filter=None):
     """recursively walk `path` and parse every link inside"""
@@ -103,7 +113,10 @@ class RegistryCleaner(object):
             logging.info("DRY_RUN: would have deleted %s", path)
         else:
             logging.info("Deleting %s", path)
-            shutil.rmtree(path)
+            try:
+                shutil.rmtree(path)
+            except Exception as error:
+                logging.critical("Failed to delete directory:%s", error)
 
     def _delete_from_tag_index_for_revision(self, repo, digest):
         """delete revision from tag indexes"""
