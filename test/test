@@ -74,6 +74,7 @@ function delete_all_test_data() {
   for id in $(get_test_docker_container_ids); do docker stop $id; done
   for id in $(get_test_docker_container_ids); do docker rm $id; done
   delete_test_docker_images
+  sudo rm -rf /opt/registry_data/docker/registry/v2/repositories /opt/registry_data/docker/registry/v2/blobs
 }
 
 function run_delete() {
@@ -198,6 +199,7 @@ function test_deleting_with_dry_run_does_not_delete() {
 }
 
 function test_deleting_with_no_image_argument_tells_you_to_try_again() {
+  setup
   if run_delete --image test 2>&1 | grep "No repository 'test' found in repositories directory"; then
     echo "Yep, we expected this error message before adding a repo"
   else
