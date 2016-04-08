@@ -127,16 +127,18 @@ class RegistryCleaner(object):
         for path in paths:
             self._delete_dir(path)
 
-    def _delete_revisions(self, repo, revisions):
+    def _delete_revisions(self, repo, revisions, blobs_to_keep=None):
         """delete revisions from list of directories"""
+        if blobs_to_keep is None:
+            blobs_to_keep = []
         for revision_dir in revisions:
             digests = get_links(revision_dir)
             for digest in digests:
                 self._delete_from_tag_index_for_revision(repo, digest)
-                self._delete_blob(digest)
+                if digest not in blobs_to_keep:
+                    self._delete_blob(digest)
 
             self._delete_dir(revision_dir)
-
 
     def _get_tags(self, repo):
         """get all tags for given repository"""
@@ -183,9 +185,9 @@ class RegistryCleaner(object):
 
     def _layer_in_same_repo(self, repo, tag, layer):
         """check if layer is found in other tags of same repository"""
-        for tag in [t for t in self._get_tags(repo) if t != tag]:
+        for other_tag in [t for t in self._get_tags(repo) if t != tag]:
             path = os.path.join(self.registry_data_dir, "repositories", repo,
-                                "_manifests/tags", tag, "current/link")
+                                "_manifests/tags", other_tag, "current/link")
             manifest = get_digest_from_blob(path)
             try:
                 layers = self._get_layers_from_blob(manifest)
@@ -193,12 +195,23 @@ class RegistryCleaner(object):
                     return True
             except IOError:
                 if self._blob_path_for_revision_is_missing(manifest):
-                    logging.warn("Blob for digest %s does not exist. Deleting tag manifest: %s", manifest, tag)
+                    logging.warn("Blob for digest %s does not exist. Deleting tag manifest: %s", manifest, other_tag)
                     tag_dir = os.path.join(self.registry_data_dir, "repositories", repo,
-                                        "_manifests/tags", tag)
+                                        "_manifests/tags", other_tag)
                     self._delete_dir(tag_dir)
                 else:
                     raise
+        return False
+
+    def _manifest_in_same_repo(self, repo, tag, manifest):
+        """check if manifest is found in other tags of same repository"""
+        for other_tag in [t for t in self._get_tags(repo) if t != tag]:
+            path = os.path.join(self.registry_data_dir, "repositories", repo,
+                                "_manifests/tags", other_tag, "current/link")
+            other_manifest = get_digest_from_blob(path)
+            if other_manifest == manifest:
+                return True
+
         return False
 
     def delete_entire_repository(self, repo, force=False):
@@ -223,22 +236,32 @@ class RegistryCleaner(object):
         logging.debug("Deleting repository '%s' with tag '%s'", repo, tag)
         tag_dir = os.path.join(self.registry_data_dir, "repositories", repo, "_manifests/tags", tag)
         if not os.path.isdir(tag_dir):
-            raise RegistryCleanerError("No repository '{0}' tag '{1}' found in repositories "\
+            raise RegistryCleanerError("No repository '{0}' tag '{1}' found in repositories "
                                         "directory {2}/repositories".
                                        format(repo, tag, self.registry_data_dir))
         manifests = set(get_links(tag_dir))
         revisions_to_delete = []
+        blobs_to_keep = []
         layers = []
+        all_links_but_current = set(self._get_all_links(except_repo=repo))
         for manifest in manifests:
-            logging.debug("Looking up fileystem layers for manifest digest %s", manifest)
-            revisions_to_delete.append(
-                os.path.join(self.registry_data_dir, "repositories", repo,
-                             "_manifests/revisions/sha256", manifest)
-            )
-            layers.extend(self._get_layers_from_blob(manifest))
+            logging.debug("Looking up filesystem layers for manifest digest %s", manifest)
+
+            if self._manifest_in_same_repo(repo, tag, manifest):
+                logging.debug("Not deleting since we found another tag using manifest: %s", manifest)
+                continue
+            else:
+                revisions_to_delete.append(
+                    os.path.join(self.registry_data_dir, "repositories", repo,
+                                 "_manifests/revisions/sha256", manifest)
+                )
+                if manifest in all_links_but_current:
+                    logging.debug("Not getting layers since we found another repo using manifest: %s", manifest)
+                    blobs_to_keep.append(manifest)
+                else:
+                    layers.extend(self._get_layers_from_blob(manifest))
 
         layers_uniq = set(layers)
-        all_links_but_current = set(self._get_all_links(except_repo=repo))
         for layer in layers_uniq:
             if self._layer_in_same_repo(repo, tag, layer):
                 logging.debug("Not deleting since we found another tag using digest: %s", layer)
@@ -250,7 +273,7 @@ class RegistryCleaner(object):
             else:
                 self._delete_blob(layer)
 
-        self._delete_revisions(repo, revisions_to_delete)
+        self._delete_revisions(repo, revisions_to_delete, blobs_to_keep)
         self._delete_dir(tag_dir)
 
     def delete_untagged(self, repo):
