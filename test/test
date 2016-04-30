@@ -74,11 +74,15 @@ function build_and_push_test_images() {
   done
 }
 
+function delete_all_registry_data() {
+  sudo rm -rf /opt/registry_data/docker/registry/v2/repositories /opt/registry_data/docker/registry/v2/blobs
+}
+
 function delete_all_test_data() {
   for id in $(get_test_docker_container_ids); do docker stop $id; done
   for id in $(get_test_docker_container_ids); do docker rm $id; done
   delete_test_docker_images
-  sudo rm -rf /opt/registry_data/docker/registry/v2/repositories /opt/registry_data/docker/registry/v2/blobs
+  delete_all_registry_data
 }
 
 function run_delete() {
@@ -128,6 +132,18 @@ function test_deleting_untagged() {
   run_delete --image test/repousinglatest:latest --force --prune
   delete_test_docker_images
   assert_that_registry_has_no_data
+}
+
+function test_deleting_a_tag_and_then_repushing_it_works() {
+  setup
+  build_test_images a
+  docker tag localhost:5000/test/a localhost:5000/test/somethingwithtag:1
+  docker push localhost:5000/test/somethingwithtag:1
+  run_delete --image test/somethingwithtag:1
+  bounce_registry
+  docker push localhost:5000/test/somethingwithtag:1
+  delete_test_docker_images
+  docker pull localhost:5000/test/somethingwithtag:1
 }
 
 function test_deleting_all_images_deletes_all_data() {
@@ -231,6 +247,7 @@ function test_deleting_with_no_image_argument_tells_you_to_try_again() {
 }
 
 test_deleting_untagged
+test_deleting_a_tag_and_repushing_works
 test_deleting_all_images_deletes_all_data
 test_deleting_tag_first_does_not_leave_stuff_lying_around
 test_deleting_an_image_does_not_harm_an_equivalent_tag_in_another_repo
