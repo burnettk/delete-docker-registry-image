@@ -14,6 +14,7 @@ import sys
 import shutil
 import glob
 
+
 def del_empty_dirs(s_dir, top_level):
     """recursively delete empty directories"""
     b_empty = True
@@ -32,6 +33,7 @@ def del_empty_dirs(s_dir, top_level):
             os.rmdir(s_dir)
 
     return b_empty
+
 
 def get_layers_from_blob(path):
     """parse json blob and get set of layer digests"""
@@ -72,10 +74,14 @@ def get_links(path, _filter=None):
                     result.append(get_digest_from_blob(filepath))
     return result
 
-class RegistryCleanerError(Exception): pass
+
+class RegistryCleanerError(Exception):
+    pass
+
 
 class RegistryCleaner(object):
     """Clean registry"""
+
     def __init__(self, registry_data_dir, dry_run=False):
         self.registry_data_dir = registry_data_dir
         if not os.path.isdir(self.registry_data_dir):
@@ -97,7 +103,7 @@ class RegistryCleaner(object):
     def _blob_path_for_revision(self, digest):
         """where we can find the blob that contains the json describing this digest"""
         return os.path.join(self.registry_data_dir, "blobs/sha256",
-                                 digest[0:2], digest, "data")
+                            digest[0:2], digest, "data")
 
     def _blob_path_for_revision_is_missing(self, digest):
         """for each revision, there should be a blob describing it"""
@@ -197,7 +203,7 @@ class RegistryCleaner(object):
                 if self._blob_path_for_revision_is_missing(manifest):
                     logging.warn("Blob for digest %s does not exist. Deleting tag manifest: %s", manifest, other_tag)
                     tag_dir = os.path.join(self.registry_data_dir, "repositories", repo,
-                                        "_manifests/tags", other_tag)
+                                           "_manifests/tags", other_tag)
                     self._delete_dir(tag_dir)
                 else:
                     raise
@@ -214,13 +220,13 @@ class RegistryCleaner(object):
 
         return False
 
-    def delete_entire_repository(self, repo, force=False):
+    def delete_entire_repository(self, repo):
         """delete all blobs for given repository repo"""
         logging.debug("Deleting entire repository '%s'", repo)
         repo_dir = os.path.join(self.registry_data_dir, "repositories", repo)
         if not os.path.isdir(repo_dir):
-            raise RegistryCleanerError("No repository '{0}' found in repositories "\
-                                        "directory {1}/repositories".
+            raise RegistryCleanerError("No repository '{0}' found in repositories "
+                                       "directory {1}/repositories".
                                        format(repo, self.registry_data_dir))
         links = set(get_links(repo_dir))
         all_links_but_current = set(self._get_all_links(except_repo=repo))
@@ -231,13 +237,13 @@ class RegistryCleaner(object):
                 self._delete_blob(layer)
         self._delete_dir(repo_dir)
 
-    def delete_repository_tag(self, repo, tag, force=False):
+    def delete_repository_tag(self, repo, tag):
         """delete all blobs only for given tag of repository"""
         logging.debug("Deleting repository '%s' with tag '%s'", repo, tag)
         tag_dir = os.path.join(self.registry_data_dir, "repositories", repo, "_manifests/tags", tag)
         if not os.path.isdir(tag_dir):
             raise RegistryCleanerError("No repository '{0}' tag '{1}' found in repositories "
-                                        "directory {2}/repositories".
+                                       "directory {2}/repositories".
                                        format(repo, tag, self.registry_data_dir))
         manifests = set(get_links(tag_dir))
         revisions_to_delete = []
@@ -282,8 +288,8 @@ class RegistryCleaner(object):
         repositories_dir = os.path.join(self.registry_data_dir, "repositories")
         repo_dir = os.path.join(repositories_dir, repo)
         if not os.path.isdir(repo_dir):
-            raise RegistryCleanerError("No repository '{0}' found in repositories "\
-                                        "directory {1}/repositories".
+            raise RegistryCleanerError("No repository '{0}' found in repositories "
+                                       "directory {1}/repositories".
                                        format(repo, self.registry_data_dir))
         tagged_links = set(get_links(repositories_dir, _filter="current"))
         layers_to_protect = []
@@ -295,7 +301,6 @@ class RegistryCleaner(object):
             logging.debug("layer_to_protect: %s", layer)
 
         tagged_revisions = set(get_links(repo_dir, _filter="current"))
-
 
         revisions_to_delete = []
         layers_to_delete = []
@@ -317,7 +322,7 @@ class RegistryCleaner(object):
 
 
 def main():
-    "cli entrypoint"
+    """cli entrypoint"""
     parser = argparse.ArgumentParser(description="Cleanup docker registry")
     parser.add_argument("-i", "--image",
                         dest="image",
@@ -353,7 +358,8 @@ def main():
 
     # make sure not to log before logging is setup. that'll hose your logging config.
     if args.force:
-        logging.info("You supplied the force switch, which is deprecated. It has no effect now, and the script defaults to doing what used to be only happen when force was true")
+        logging.info(
+            "You supplied the force switch, which is deprecated. It has no effect now, and the script defaults to doing what used to be only happen when force was true")
 
     splitted = args.image.split(":")
     if len(splitted) == 2:
@@ -374,15 +380,16 @@ def main():
             cleaner.delete_untagged(image)
         else:
             if tag:
-                cleaner.delete_repository_tag(image, tag, force=args.force)
+                cleaner.delete_repository_tag(image, tag)
             else:
-                cleaner.delete_entire_repository(image, force=args.force)
+                cleaner.delete_entire_repository(image)
 
         if args.prune:
             cleaner.prune()
     except RegistryCleanerError as error:
         logging.fatal(error)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
