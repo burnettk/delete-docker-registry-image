@@ -6,8 +6,9 @@ import argparse
 from distutils.version import LooseVersion
 import requests
 
+
 def main():
-    "cli entrypoint"
+    """cli entrypoint"""
     parser = argparse.ArgumentParser(description="Cleanup docker registry")
     parser.add_argument("-e", "--exclude",
                         dest="exclude",
@@ -40,7 +41,6 @@ def main():
                         help="Password for auth")
     args = parser.parse_args()
 
-
     # Get catalog
     if args.user and args.password:
         auth = (args.user, args.password)
@@ -72,12 +72,13 @@ def main():
             else:
                 tags_to_delete = matching_tags
             for tag in tags_to_delete:
-                command2run = "/usr/local/bin/delete_docker_registry_image --image {0}:{1}".\
-                              format(repository, tag)
+                command2run = "/usr/local/bin/delete_docker_registry_image --image {0}:{1}". \
+                    format(repository, tag)
                 print("Running: {0}".format(command2run))
                 out = subprocess.Popen(command2run, shell=True, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT).stdout.read()
                 print(out)
+
 
 if __name__ == '__main__':
     main()
