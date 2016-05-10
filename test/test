@@ -32,8 +32,20 @@ function delete_test_docker_images() {
 
 # if it finds a directory, fail. If not, noop.
 function assert_that_registry_has_no_data() {
+
+  # who cares about uploads. they are temporary and we can delete them anytime.
+  find /opt/registry_data/docker/registry/v2 -name _uploads -type d | sudo xargs rm -rf
+
+  # delete empty directories after killing _uploads dirs
+  lines=$(find /opt/registry_data/docker/registry/v2/* -type d -empty 2>/dev/null | wc -l)
+  if [ $lines -gt 0 ]; then
+    sudo find /opt/registry_data/docker/registry/v2/* -type d -empty -delete
+  fi
+
   if [ "$(ls -A /opt/registry_data/docker/registry/v2)" ]; then
-    echo "ASSERTION FAILURE: registry has data when we expected it not to have data"
+    echo "ASSERTION FAILURE: registry has data when we expected it not to have data. leaf node dirs:"
+    # finding -type d (directories) with 2 links gets just "leaf" node directories
+    find /opt/registry_data/docker/registry/v2 -type d -links 2
     i=0; while caller $i ;do ((i++)) ;done
     false
   fi
@@ -76,6 +88,11 @@ function build_and_push_test_images() {
 
 function delete_all_registry_data() {
   sudo rm -rf /opt/registry_data/docker/registry/v2/repositories /opt/registry_data/docker/registry/v2/blobs
+}
+
+function back_up_registry_data_for_later_inspection_in_case_test_fails() {
+  sudo rm -rf /opt/registry_data/docker/registry/v2_backup
+  sudo cp -r /opt/registry_data/docker/registry/v2 /opt/registry_data/docker/registry/v2_backup
 }
 
 function delete_all_test_data() {
@@ -174,6 +191,7 @@ function test_deleting_tag_first_does_not_leave_stuff_lying_around() {
   build_and_push_test_images a
   docker tag localhost:5000/test/a localhost:5000/test/somethingwithtag:1
   docker push localhost:5000/test/somethingwithtag:1
+  back_up_registry_data_for_later_inspection_in_case_test_fails
   run_delete --image test/somethingwithtag:1 --force --prune -v
   delete_test_docker_images
   docker pull localhost:5000/test/a # we haven't deleted this image yet, even though it has the same data as the tag we deleted. confirm we can still pull it.
@@ -247,10 +265,10 @@ function test_deleting_with_no_image_argument_tells_you_to_try_again() {
 }
 
 test_deleting_untagged
-test_deleting_all_images_deletes_all_data
-test_deleting_tag_first_does_not_leave_stuff_lying_around
-test_deleting_an_image_does_not_harm_an_equivalent_tag_in_another_repo
-test_deleting_by_tag
+test_deleting_all_images_deletes_all_data # fail
+test_deleting_tag_first_does_not_leave_stuff_lying_around # fail, but not any more
+test_deleting_an_image_does_not_harm_an_equivalent_tag_in_another_repo # pass
+test_deleting_by_tag # next three pass
 test_deleting_actually_deletes
 test_deleting_with_dry_run_does_not_delete
 test_deleting_with_no_image_argument_tells_you_to_try_again

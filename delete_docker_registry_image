@@ -245,12 +245,12 @@ class RegistryCleaner(object):
             raise RegistryCleanerError("No repository '{0}' tag '{1}' found in repositories "
                                        "directory {2}/repositories".
                                        format(repo, tag, self.registry_data_dir))
-        manifests = set(get_links(tag_dir))
+        manifests_for_tag = set(get_links(tag_dir))
         revisions_to_delete = []
         blobs_to_keep = []
         layers = []
-        all_links_but_current = set(self._get_all_links(except_repo=repo))
-        for manifest in manifests:
+        all_links_not_in_current_repo = set(self._get_all_links(except_repo=repo))
+        for manifest in manifests_for_tag:
             logging.debug("Looking up filesystem layers for manifest digest %s", manifest)
 
             if self._manifest_in_same_repo(repo, tag, manifest):
@@ -261,11 +261,11 @@ class RegistryCleaner(object):
                     os.path.join(self.registry_data_dir, "repositories", repo,
                                  "_manifests/revisions/sha256", manifest)
                 )
-                if manifest in all_links_but_current:
-                    logging.debug("Not getting layers since we found another repo using manifest: %s", manifest)
+                if manifest in all_links_not_in_current_repo:
+                    logging.debug("Not deleting the blob data since we found another repo using manifest: %s", manifest)
                     blobs_to_keep.append(manifest)
-                else:
-                    layers.extend(self._get_layers_from_blob(manifest))
+
+                layers.extend(self._get_layers_from_blob(manifest))
 
         layers_uniq = set(layers)
         for layer in layers_uniq:
@@ -274,7 +274,7 @@ class RegistryCleaner(object):
                 continue
 
             self._delete_layer(repo, layer)
-            if layer in all_links_but_current:
+            if layer in all_links_not_in_current_repo:
                 logging.debug("Blob found in another repository. Not deleting: %s", layer)
             else:
                 self._delete_blob(layer)
