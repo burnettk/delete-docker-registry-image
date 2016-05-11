@@ -14,6 +14,8 @@ import sys
 import shutil
 import glob
 
+logger = logging.getLogger(__name__)
+
 
 def del_empty_dirs(s_dir, top_level):
     """recursively delete empty directories"""
@@ -28,7 +30,7 @@ def del_empty_dirs(s_dir, top_level):
             b_empty = False
 
     if b_empty:
-        logging.debug("Deleting empty directory '%s'", s_dir)
+        logger.debug("Deleting empty directory '%s'", s_dir)
         if not top_level:
             os.rmdir(s_dir)
 
@@ -49,7 +51,7 @@ def get_layers_from_blob(path):
                     result.add(data["config"]["digest"].split(":")[1])
             return result
     except Exception as error:
-        logging.critical("Failed to read layers from blob:%s", error)
+        logger.critical("Failed to read layers from blob:%s", error)
         return set()
 
 
@@ -59,7 +61,7 @@ def get_digest_from_blob(path):
         with open(path, "r") as blob:
             return blob.read().split(":")[1]
     except Exception as error:
-        logging.critical("Failed to read digest from blob:%s", error)
+        logger.critical("Failed to read digest from blob:%s", error)
         return ""
 
 
@@ -116,13 +118,13 @@ class RegistryCleaner(object):
     def _delete_dir(self, path):
         """remove directory from filesystem"""
         if self.dry_run:
-            logging.info("DRY_RUN: would have deleted %s", path)
+            logger.info("DRY_RUN: would have deleted %s", path)
         else:
-            logging.info("Deleting %s", path)
+            logger.info("Deleting %s", path)
             try:
                 shutil.rmtree(path)
             except Exception as error:
-                logging.critical("Failed to delete directory:%s", error)
+                logger.critical("Failed to delete directory:%s", error)
 
     def _delete_from_tag_index_for_revision(self, repo, digest):
         """delete revision from tag indexes"""
@@ -150,7 +152,7 @@ class RegistryCleaner(object):
         """get all tags for given repository"""
         path = os.path.join(self.registry_data_dir, "repositories", repo, "_manifests/tags")
         if not os.path.isdir(path):
-            logging.critical("No repository '%s' found in repositories directory %s",
+            logger.critical("No repository '%s' found in repositories directory %s",
                              repo, self.registry_data_dir)
             return None
         result = []
@@ -201,7 +203,7 @@ class RegistryCleaner(object):
                     return True
             except IOError:
                 if self._blob_path_for_revision_is_missing(manifest):
-                    logging.warn("Blob for digest %s does not exist. Deleting tag manifest: %s", manifest, other_tag)
+                    logger.warn("Blob for digest %s does not exist. Deleting tag manifest: %s", manifest, other_tag)
                     tag_dir = os.path.join(self.registry_data_dir, "repositories", repo,
                                            "_manifests/tags", other_tag)
                     self._delete_dir(tag_dir)
@@ -222,7 +224,7 @@ class RegistryCleaner(object):
 
     def delete_entire_repository(self, repo):
         """delete all blobs for given repository repo"""
-        logging.debug("Deleting entire repository '%s'", repo)
+        logger.debug("Deleting entire repository '%s'", repo)
         repo_dir = os.path.join(self.registry_data_dir, "repositories", repo)
         if not os.path.isdir(repo_dir):
             raise RegistryCleanerError("No repository '{0}' found in repositories "
@@ -232,14 +234,14 @@ class RegistryCleaner(object):
         all_links_but_current = set(self._get_all_links(except_repo=repo))
         for layer in links:
             if layer in all_links_but_current:
-                logging.debug("Blob found in another repository. Not deleting: %s", layer)
+                logger.debug("Blob found in another repository. Not deleting: %s", layer)
             else:
                 self._delete_blob(layer)
         self._delete_dir(repo_dir)
 
     def delete_repository_tag(self, repo, tag):
         """delete all blobs only for given tag of repository"""
-        logging.debug("Deleting repository '%s' with tag '%s'", repo, tag)
+        logger.debug("Deleting repository '%s' with tag '%s'", repo, tag)
         tag_dir = os.path.join(self.registry_data_dir, "repositories", repo, "_manifests/tags", tag)
         if not os.path.isdir(tag_dir):
             raise RegistryCleanerError("No repository '{0}' tag '{1}' found in repositories "
@@ -251,10 +253,10 @@ class RegistryCleaner(object):
         layers = []
         all_links_not_in_current_repo = set(self._get_all_links(except_repo=repo))
         for manifest in manifests_for_tag:
-            logging.debug("Looking up filesystem layers for manifest digest %s", manifest)
+            logger.debug("Looking up filesystem layers for manifest digest %s", manifest)
 
             if self._manifest_in_same_repo(repo, tag, manifest):
-                logging.debug("Not deleting since we found another tag using manifest: %s", manifest)
+                logger.debug("Not deleting since we found another tag using manifest: %s", manifest)
                 continue
             else:
                 revisions_to_delete.append(
@@ -262,7 +264,7 @@ class RegistryCleaner(object):
                                  "_manifests/revisions/sha256", manifest)
                 )
                 if manifest in all_links_not_in_current_repo:
-                    logging.debug("Not deleting the blob data since we found another repo using manifest: %s", manifest)
+                    logger.debug("Not deleting the blob data since we found another repo using manifest: %s", manifest)
                     blobs_to_keep.append(manifest)
 
                 layers.extend(self._get_layers_from_blob(manifest))
@@ -270,12 +272,12 @@ class RegistryCleaner(object):
         layers_uniq = set(layers)
         for layer in layers_uniq:
             if self._layer_in_same_repo(repo, tag, layer):
-                logging.debug("Not deleting since we found another tag using digest: %s", layer)
+                logger.debug("Not deleting since we found another tag using digest: %s", layer)
                 continue
 
             self._delete_layer(repo, layer)
             if layer in all_links_not_in_current_repo:
-                logging.debug("Blob found in another repository. Not deleting: %s", layer)
+                logger.debug("Blob found in another repository. Not deleting: %s", layer)
             else:
                 self._delete_blob(layer)
 
@@ -284,7 +286,7 @@ class RegistryCleaner(object):
 
     def delete_untagged(self, repo):
         """delete all untagged data from repo"""
-        logging.debug("Deleting utagged data from repository '%s'", repo)
+        logger.debug("Deleting utagged data from repository '%s'", repo)
         repositories_dir = os.path.join(self.registry_data_dir, "repositories")
         repo_dir = os.path.join(repositories_dir, repo)
         if not os.path.isdir(repo_dir):
@@ -298,7 +300,7 @@ class RegistryCleaner(object):
 
         unique_layers_to_protect = set(layers_to_protect)
         for layer in unique_layers_to_protect:
-            logging.debug("layer_to_protect: %s", layer)
+            logger.debug("layer_to_protect: %s", layer)
 
         tagged_revisions = set(get_links(repo_dir, _filter="current"))
 
@@ -350,15 +352,20 @@ def main():
                         help="Delete all untagged blobs for image")
     args = parser.parse_args()
 
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(u'%(levelname)-8s [%(asctime)s]  %(message)s'))
+    logger.addHandler(handler)
+
     if args.verbose:
-        logging_level = logging.DEBUG
+        logger.setLevel(logging.DEBUG)
     else:
-        logging_level = logging.INFO
-    logging.basicConfig(format=u'%(levelname)-8s [%(asctime)s]  %(message)s', level=logging_level)
+        logger.setLevel(logging.INFO)
+
 
     # make sure not to log before logging is setup. that'll hose your logging config.
     if args.force:
-        logging.info(
+        logger.info(
             "You supplied the force switch, which is deprecated. It has no effect now, and the script defaults to doing what used to be only happen when force was true")
 
     splitted = args.image.split(":")
@@ -387,7 +394,7 @@ def main():
         if args.prune:
             cleaner.prune()
     except RegistryCleanerError as error:
-        logging.fatal(error)
+        logger.fatal(error)
         sys.exit(1)
 
 
