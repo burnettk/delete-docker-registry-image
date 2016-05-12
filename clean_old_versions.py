@@ -39,6 +39,8 @@ def main():
     parser.add_argument("-P", "--password",
                         dest="password",
                         help="Password for auth")
+    parser.add_argument("--no_check_certificate",
+			action='store_false')
     args = parser.parse_args()
 
     # Get catalog
@@ -47,14 +49,14 @@ def main():
     else:
         auth = None
     response = requests.get(args.registry_url + "/v2/_catalog",
-                            auth=auth, verify=False)
+                            auth=auth, verify=args.no_check_certificate)
     repositories = response.json()["repositories"]
     # For each repository check it matches with args.image
     for repository in repositories:
         if re.search(args.image, repository):
             # Get tags
             response = requests.get(args.registry_url + "/v2/" + repository + "/tags/list",
-                                    auth=auth, verify=False)
+                                    auth=auth, verify=args.no_check_certificate)
             tags = response.json()["tags"]
             # For each tag, check it does not matches with args.exclude
             matching_tags = []
