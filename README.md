@@ -49,10 +49,12 @@ Example:
 
 Known test-passing configurations:
  1. docker: 1.9.1, registry:2.2.1
+ 2. docker: 1.10.2, registry:2.3.0
+ 1. docker: 1.11.2, registry:2.3.0
+ 1. docker: 1.12.1, registry:2.5.0
 
 Known test-failing configurations:
  1. docker: 1.10.2, registry:2.2.1
- 2. docker: 1.10.2, registry:2.3.0
 
 When tests are run with a new docker daemon and an older registry,
 architecture-specific config files are created, but they are not referenced
@@ -61,3 +63,16 @@ deleted, but these architecture-specific config files are still hanging around.
 With the newer registry, these config files are referenced in the schema
 version 2 manifest, so we can easily delete them. It's probably best to avoid
 use of this script with the version combinations that fail tests.
+
+## Alternatives
+
+Docker is building or has built much of this functionality in newer versions of
+docker and the registry.
+
+The ability to delete the metadata for a manifest was added in registry:2.2. Make
+sure you give the registry the environment variable
+REGISTRY_STORAGE_DELETE_ENABLED=true. Follow the instructions at
+https://github.com/docker/docker-registry/issues/988#issuecomment-224280919 to
+delete a tag by name. Once the metadata is deleted, follow the instructions at
+https://github.com/docker/distribution/blob/master/docs/configuration.md to run
+garbage collection, which will clean up the binary data (the big stuff).

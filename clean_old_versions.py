@@ -28,6 +28,10 @@ def main():
                         dest="registry_url",
                         default="http://localhost",
                         help="Registry URL")
+    parser.add_argument("-s", "--script-path",
+                        dest="script_path",
+                        default="/usr/local/bin/delete_docker_registry_image",
+                        help="delete_docker_registry_image full script path")
     parser.add_argument("-l", "--last",
                         dest="last",
                         default=5,
@@ -74,8 +78,8 @@ def main():
             else:
                 tags_to_delete = matching_tags
             for tag in tags_to_delete:
-                command2run = "/usr/local/bin/delete_docker_registry_image --image {0}:{1}". \
-                    format(repository, tag)
+                command2run = "{0} --image {1}:{2}". \
+                    format(args.script_path, repository, tag)
                 print("Running: {0}".format(command2run))
                 out = subprocess.Popen(command2run, shell=True, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT).stdout.read()

@@ -1,6 +1,7 @@
 registry:
   # image: registry:2.2.1
   image: registry:2.3.0
+  # image: registry:2.5.0
   container_name: registry
   ports:
     - 5000:5000

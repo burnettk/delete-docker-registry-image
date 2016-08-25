@@ -103,7 +103,7 @@ function delete_all_test_data() {
 }
 
 function run_delete() {
-  sudo /vagrant/delete_docker_registry_image "$@"
+  sudo /vagrant/delete_docker_registry_image.py "$@"
 }
 
 function bounce_registry() {
@@ -122,10 +122,10 @@ function test_deleting_untagged() {
   docker tag localhost:5000/test/b localhost:5000/test/repousinglatest
   docker push localhost:5000/test/repousinglatest
 
-  docker tag -f localhost:5000/test/a localhost:5000/test/repousinglatest
+  docker tag localhost:5000/test/a localhost:5000/test/repousinglatest
   docker push localhost:5000/test/repousinglatest
 
-  docker tag -f localhost:5000/test/c:1 localhost:5000/test/repousinglatest
+  docker tag localhost:5000/test/c:1 localhost:5000/test/repousinglatest
   docker push localhost:5000/test/repousinglatest
 
   before=$(find /opt/registry_data/docker/registry/v2/blobs -type f | wc -l)
@@ -264,6 +264,36 @@ function test_deleting_with_no_image_argument_tells_you_to_try_again() {
   assert_that_registry_has_no_data
 }
 
+function test_clean_old_versions() {
+  docker pull busybox
+
+  docker tag busybox localhost:5000/busybox/busy:1
+  docker tag busybox localhost:5000/busybox/busy:2
+  docker tag busybox localhost:5000/busybox/busy:3
+  docker tag busybox localhost:5000/busybox/busy:4
+  docker tag busybox localhost:5000/busybox/busy:latest
+
+  docker push localhost:5000/busybox/busy:1
+  docker push localhost:5000/busybox/busy:2
+  docker push localhost:5000/busybox/busy:3
+  docker push localhost:5000/busybox/busy:4
+  docker push localhost:5000/busybox/busy:latest
+
+  # clean any tags (.*) of busybox/busy. keep the four latest tags. so this should kill busybox/busy:1
+  sudo ./clean_old_versions.py --registry-url http://localhost:5000 --image 'busybox/busy' --include '.*' -l 4 --script-path /vagrant/delete_docker_registry_image.py
+
+  # remove image locally
+  docker rmi localhost:5000/busybox/busy:1
+
+  if docker pull localhost:5000/busybox/busy:1; then
+    echo "we should not have been able to pull the tag. it should have been deleted."
+    exit 1
+  fi
+
+  # confirm we can pull :2. it was one of the four that we were supposed to keep around.
+  docker push localhost:5000/busybox/busy:2
+}
+
 test_deleting_untagged
 test_deleting_all_images_deletes_all_data # fail
 test_deleting_tag_first_does_not_leave_stuff_lying_around # fail, but not any more
@@ -272,5 +302,6 @@ test_deleting_by_tag # next three pass
 test_deleting_actually_deletes
 test_deleting_with_dry_run_does_not_delete
 test_deleting_with_no_image_argument_tells_you_to_try_again
+test_clean_old_versions
 
 echo TESTS PASSED
