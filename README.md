@@ -34,11 +34,11 @@ regexp pattern.
 
 Usage:
 
-    ./clean_old_versions.py --image reg_exp_of_repository_to_find --include reg_exp_of_tag_to_find -l history_to_maintain
+    ./clean_old_versions.py --image reg_exp_of_repository_to_find --include reg_exp_of_tag_to_find -l history_to_maintain --registry-url location_of_docker_registry
 
 Example:
 
-    ./clean_old_versions.py --image '^repo/sitor*' --include '^0.1.*' -l 2
+    ./clean_old_versions.py --image '^repo/sitor*' --include '^0.1.*' -l 2 --registry-url http://localhost:5000
 
 ## Run tests for this project
 
