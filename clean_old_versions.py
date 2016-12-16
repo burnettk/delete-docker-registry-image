@@ -5,7 +5,31 @@ import subprocess
 import argparse
 from distutils.version import LooseVersion
 import requests
+from datetime import datetime
+import json
+import sys
 
+DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
+
+# taken from http://stackoverflow.com/questions/25470844/specify-format-for-input-arguments-argparse-python#answer-25470943
+def valid_date(date_str):
+    try:
+        return datetime.strptime(date_str, DATE_FORMAT)
+    except ValueError:
+        msg = "Not a valid date: '{0}'.".format(date_str)
+        raise argparse.ArgumentTypeError(msg)
+
+def get_created_date_for_tag(tag, repository, auth, args):
+    response = requests.get(args.registry_url + "/v2/" + repository + "/manifests/" + tag,
+                            auth=auth, verify=args.no_check_certificate)
+    if response.json()['schemaVersion'] == 1:
+        created_str = json.loads(response.json()['history'][0]['v1Compatibility'])['created'].split(".")[0]
+    elif response.json()['schemaVersion'] == 2:
+        digest = response.json()["config"]["digest"]
+        response = requests.get(args.registry_url + "/v2/" + repository + "/blobs/" + digest,
+                                auth=auth, verify=args.no_check_certificate)
+        created_str = response.json()['created'].split(".")[0]
+    return(datetime.strptime(created_str,DATE_FORMAT))
 
 def main():
     """cli entrypoint"""
@@ -34,9 +58,27 @@ def main():
                         help="delete_docker_registry_image full script path")
     parser.add_argument("-l", "--last",
                         dest="last",
-                        default=5,
                         type=int,
                         help="Keep last N tags")
+    parser.add_argument("-b", "--before-date",
+                        dest="before",
+                        type=valid_date,
+                        help="Only delete tags created before given date. " +
+                             "The date must be given in the format " +
+                             "'YYYY-MM-DDTHH24:mm:ss' (e.q. '" +
+                             datetime.now().strftime(DATE_FORMAT) + "').")
+    parser.add_argument("-a", "--after-date",
+                        dest="after",
+                        type=valid_date,
+                        help="Only delete tags created after given date. " +
+                             "The date must be given in the format " +
+                             "'YYYY-MM-DDTHH24:mm:ss' (e.q. '" +
+                             datetime.now().strftime(DATE_FORMAT) + "').")
+    parser.add_argument("-o", "--order",
+                        dest="order",
+                        choices=['name', 'date'],
+                        default='name',
+                        help="Selects the order in which tags are sorted when the option '--last' is used")
     parser.add_argument("-U", "--user",
                         dest="user",
                         help="User for auth")
@@ -62,6 +104,7 @@ def main():
             response = requests.get(args.registry_url + "/v2/" + repository + "/tags/list",
                                     auth=auth, verify=args.no_check_certificate)
             tags = response.json()["tags"]
+
             # For each tag, check it does not matches with args.exclude
             matching_tags = []
             for tag in tags:
@@ -70,13 +113,34 @@ def main():
                         matching_tags.append(tag)
 
             # Sort tags
-            matching_tags.sort(key=lambda s: LooseVersion(re.sub('[^0-9.]', '9', s)))
+            if args.order == 'name':
+                order_fn = lambda s: LooseVersion(re.sub('[^0-9.]', '9', s))
+            else:
+                order_fn = lambda s: get_created_date_for_tag(s, repository, auth, args)
+
+            matching_tags.sort(key=order_fn)
+
+            # Set number of last tags to keep to the default value of 5
+            # if 'last' is not set
+            if args.last is None:
+                args.last = 5
 
             # Delete all except N last items
-            if args.last > 0:
-                tags_to_delete = matching_tags[:-args.last]
+            if args.last is not None and args.last > 0:
+                matching_tags = matching_tags[:-args.last]
+            else:
+                matching_tags = matching_tags
+
+            tags_to_delete = []
+            if args.before or args.after:
+                for tag in matching_tags:
+                    created = get_created_date_for_tag(tag, repository, auth, args)
+
+                    if (not args.before or created < args.before) and (not args.after or created > args.after) :
+                        tags_to_delete.append(tag)
             else:
                 tags_to_delete = matching_tags
+
             for tag in tags_to_delete:
                 command2run = "{0} --image {1}:{2}". \
                     format(args.script_path, repository, tag)

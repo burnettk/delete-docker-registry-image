@@ -34,11 +34,15 @@ regexp pattern.
 
 Usage:
 
-    ./clean_old_versions.py --image reg_exp_of_repository_to_find --include reg_exp_of_tag_to_find -l history_to_maintain --registry-url location_of_docker_registry
+    ./clean_old_versions.py --image reg_exp_of_repository_to_find --include reg_exp_of_tag_to_find -l history_to_maintain --registry-url location_of_docker_registry -o tag_ordering -b only_tags_before_date -a only_tags_after_date
 
 Example:
+Search for all images whose name start with 'repo/sitor' and delete all tags
+whose name start with '0.1.' keeping the last 2 tags and of the remaining tags
+deletes only those having an image creation time between January 1, 2016 12 a.m.
+and June 25, 2016 12 p.m. (both datetimes are exclusive).
 
-    ./clean_old_versions.py --image '^repo/sitor*' --include '^0.1.*' -l 2 --registry-url http://localhost:5000
+    ./clean_old_versions.py --image '^repo/sitor*' --include '^0.1.*' -l 2 -b 2016-06-25T12:00:00 -a 2016-01-01T00:00:00 --registry-url http://localhost:5000
 
 ## Run tests for this project
 
