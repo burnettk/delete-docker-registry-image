@@ -40,6 +40,8 @@ Example:
 
     ./clean_old_versions.py --image '^repo/sitor*' --include '^0.1.*' -l 2 --registry-url http://localhost:5000
 
+Add `--dry-run` as argument for a test run without actual removal of tags.
+
 ## Run tests for this project
 
     ./test/start_up_vagrant_box_for_running_tests
