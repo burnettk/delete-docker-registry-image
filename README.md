@@ -44,6 +44,8 @@ and June 25, 2016 12 p.m. (both datetimes are exclusive).
 
     ./clean_old_versions.py --image '^repo/sitor*' --include '^0.1.*' -l 2 -b 2016-06-25T12:00:00 -a 2016-01-01T00:00:00 --registry-url http://localhost:5000
 
+Add `--dry-run` as argument for a test run without actual removal of tags.
+
 ## Run tests for this project
 
     ./test/start_up_vagrant_box_for_running_tests
