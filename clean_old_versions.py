@@ -34,6 +34,12 @@ def get_created_date_for_tag(tag, repository, auth, args):
         created_str = response.json()['created'].split(".")[0]
     return(datetime.strptime(created_str,DATE_FORMAT))
 
+def get_paginate_query(response):
+    if 'Link' in response.headers:
+        return response.headers['Link'].split('; ')[0][:-1][1:]
+    else:
+        return None
+
 def main():
     """cli entrypoint"""
     parser = argparse.ArgumentParser(description="Cleanup docker registry")
@@ -103,7 +109,16 @@ def main():
         auth = None
     response = requests.get(args.registry_url + "/v2/_catalog",
                             auth=auth, verify=args.no_check_certificate)
+
+    nextQuery = get_paginate_query(response)
     repositories = response.json()["repositories"]
+
+    while nextQuery is not None:
+        response = requests.get(args.registry_url + nextQuery,
+                                auth=auth, verify=args.no_check_certificate)
+        repositories.extend(response.json()['repositories'])
+        nextQuery = get_paginate_query(response)
+
     # For each repository check it matches with args.image
     for repository in repositories:
         if re.search(args.image, repository):
