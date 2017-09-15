@@ -27,7 +27,7 @@ Delete one tag from a repo:
     delete_docker_registry_image --image testrepo/awesomeimage:supertag
 
 
-## clean_old_version.py
+## clean_old_versions.py
 
 This complimentary script is made to remove tags in repository based on
 regexp pattern.
