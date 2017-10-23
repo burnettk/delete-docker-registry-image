@@ -125,7 +125,10 @@ def main():
             # Get tags
             response = requests.get(args.registry_url + "/v2/" + repository + "/tags/list",
                                     auth=auth, verify=args.no_check_certificate)
-            tags = response.json()["tags"]
+
+            tags = None
+            if "tags" in response.json().keys():
+                tags = response.json()["tags"]
 
             # For each tag, check it does not matches with args.exclude
             matching_tags = []
