@@ -321,24 +321,19 @@ class RegistryCleaner(object):
         for layer in unique_layers_to_delete:
             self._delete_blob(layer)
             self._delete_layer(repo, layer)
- 
 
-    def get_tag_counts(self, repo):
+
+    def get_tag_count(self, repo):
         logger.debug("Get tag count of repository '%s'", repo)
         repo_dir = os.path.join(self.registry_data_dir, "repositories", repo)
         tags_dir = os.path.join(repo_dir, "_manifests/tags")
 
         if os.path.isdir(tags_dir):
             tags = os.listdir(tags_dir)
-            if len(tags) == 1:
-                flag = 1
-            else:
-                flag = 0
+            return len(tags)
         else:
-            logger.info("Does not exist directory: '%s'", tags_dir)
-            return False
-        return flag
-
+            logger.info("Tags directory does not exist: '%s'", tags_dir)
+            return -1
 
 def main():
     """cli entrypoint"""
@@ -404,8 +399,8 @@ def main():
             cleaner.delete_untagged(image)
         else:
             if tag:
-                flag = cleaner.get_tag_counts(image)
-                if flag == 1:
+                tag_count = cleaner.get_tag_count(image)
+                if tag_count == 1:
                     cleaner.delete_entire_repository(image)
                 else:
                     cleaner.delete_repository_tag(image, tag)
