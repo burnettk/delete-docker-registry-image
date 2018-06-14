@@ -391,7 +391,7 @@ def main():
     if 'REGISTRY_DATA_DIR' in os.environ:
         registry_data_dir = os.environ['REGISTRY_DATA_DIR']
     else:
-        registry_data_dir = "/opt/registry_data/docker/registry/v2"
+        registry_data_dir = "/mnt/backup/registry/docker/registry/v2"
 
     try:
         cleaner = RegistryCleaner(registry_data_dir, dry_run=args.dry_run)
